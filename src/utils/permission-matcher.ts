@@ -10,12 +10,21 @@ export interface MatchEvaluation {
  * Checks if a permission resource pattern matches a normalized target resource path.
  *
  * Matching semantics:
- * - '*' (single global wildcard): Matches any resource path regardless of segment count.
- * - Segment-based patterns: Evaluated segment-by-segment.
- *   - The number of segments must match exactly.
- *   - An exact segment 'transactions' matches only 'transactions'.
- *   - A wildcard segment '*' matches any single non-empty segment at that position.
- *   - Slashes or malformed substrings do not cross segment boundaries.
+ * 1. Global wildcard '*': Matches any target path regardless of depth or segment count.
+ * 2. Exact & Segment-Wildcard Match: When pattern and target have the same number of segments,
+ *    each segment must match literally or via '*' wildcard.
+ * 3. Wildcard Collection-Write Match: When a pattern ends with '/*' (e.g. 'wallets/*\/transactions/*')
+ *    representing items in a collection, it matches requests targeting the parent collection
+ *    itself (e.g. 'wallets/wallet-789/transactions').
+ * 4. Hierarchical Parent-to-Child Inheritance: Permissions defined on a collection
+ *    (e.g. 'transactions', 'accounts', 'wallets', 'wallets/:walletId/transactions')
+ *    apply to member entity items within that collection (e.g. 'transactions/txn-456',
+ *    'accounts/acc-456', 'wallets/wallet-789/transactions/txn-456').
+ *    - Patterns ending in '/*' are item wildcards and do not inherit to deeper descendants.
+ *    - Entity-level permissions on single wallet instances ('wallets/:walletId') do not cross
+ *      into independent child collections ('transactions').
+ * 5. Strict Segment Boundaries: Substring or prefix matches across segment boundaries
+ *    (e.g. 'wallets/wallet-789' vs 'wallets/wallet-7899') are strictly forbidden.
  */
 export function matchesResource(pattern: string, targetPath: string): boolean {
   if (!pattern || typeof pattern !== 'string') {
@@ -28,7 +37,7 @@ export function matchesResource(pattern: string, targetPath: string): boolean {
   const cleanPattern = pattern.trim();
   const cleanTarget = targetPath.trim();
 
-  // Global wildcard matches any resource
+  // 1. Global wildcard matches any resource
   if (cleanPattern === '*') {
     return true;
   }
@@ -36,7 +45,63 @@ export function matchesResource(pattern: string, targetPath: string): boolean {
   const patternSegments = cleanPattern.split('/');
   const targetSegments = cleanTarget.split('/');
 
-  // Segment count must match
+  // 2. Exact or segment-wildcard match (same segment count)
+  if (patternSegments.length === targetSegments.length) {
+    return segmentsMatch(patternSegments, targetSegments);
+  }
+
+  // 3. Wildcard Collection Match:
+  // Pattern ends with '/*' (e.g. 'wallets/*/transactions/*') and target is the collection (e.g. 'wallets/wallet-789/transactions')
+  // Pattern has 1 more segment than target, and pattern's last segment is '*'
+  if (
+    patternSegments.length === targetSegments.length + 1 &&
+    patternSegments[patternSegments.length - 1] === '*'
+  ) {
+    const patternPrefix = patternSegments.slice(0, -1);
+    if (segmentsMatch(patternPrefix, targetSegments)) {
+      return true;
+    }
+  }
+
+  // 4. Hierarchical Parent-to-Child Inheritance:
+  // When pattern has fewer segments than target (pattern is an ancestor)
+  if (patternSegments.length < targetSegments.length) {
+    // Patterns ending in a wildcard '*' represent item-level matches at a specific depth,
+    // and do not inherit down into deeper descendants.
+    if (patternSegments[patternSegments.length - 1] === '*') {
+      return false;
+    }
+
+    // Check if pattern is a prefix of target
+    const targetPrefix = targetSegments.slice(0, patternSegments.length);
+    if (!segmentsMatch(patternSegments, targetPrefix)) {
+      return false;
+    }
+
+    // Boundary check: A wallet entity instance (wallets/:id, 2 segments)
+    // cannot inherit into a separate sub-collection (transactions, segment index 2).
+    // Transactions within a wallet require collection-level permissions.
+    if (
+      patternSegments[0] === 'wallets' &&
+      patternSegments.length === 2 &&
+      targetSegments[2] === 'transactions'
+    ) {
+      return false;
+    }
+
+    // Top-level collection inheritance (e.g., 'transactions' -> 'transactions/txn-456',
+    // 'accounts' -> 'accounts/acc-456', 'wallets' -> 'wallets/wallet-789')
+    // or sub-collection inheritance ('wallets/:id/transactions' -> 'wallets/:id/transactions/txn-456')
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Compares two segment arrays element-by-element with segment wildcard '*' support.
+ */
+function segmentsMatch(patternSegments: string[], targetSegments: string[]): boolean {
   if (patternSegments.length !== targetSegments.length) {
     return false;
   }
@@ -46,14 +111,12 @@ export function matchesResource(pattern: string, targetPath: string): boolean {
     const tSeg = targetSegments[i];
 
     if (pSeg === '*') {
-      // Wildcard matches any non-empty single segment
       if (!tSeg || tSeg.length === 0) {
         return false;
       }
       continue;
     }
 
-    // Exact segment match
     if (pSeg !== tSeg) {
       return false;
     }
@@ -71,11 +134,16 @@ export function matchesResource(pattern: string, targetPath: string): boolean {
  *   - Wildcard segment '*': 1 point
  *   - Exact segment match: 10 points
  *
- * Higher score indicates higher specificity.
- * For example, for target 'wallets/wallet-789':
+ * Examples:
  *   - '*' -> score 0
- *   - 'wallets/*' -> score 11 (10 + 1)
- *   - 'wallets/wallet-789' -> score 20 (10 + 10)
+ *   - 'transactions' -> score 10 (parent collection)
+ *   - 'transactions/*' -> score 11 (child wildcard)
+ *   - 'transactions/txn-456' -> score 20 (child exact)
+ *   - 'wallets/*' -> score 11
+ *   - 'wallets/wallet-789' -> score 20
+ *   - 'wallets/*\/transactions/*' -> score 22
+ *   - 'wallets/wallet-789/transactions' -> score 30
+ *   - 'wallets/wallet-789/transactions/txn-456' -> score 40
  */
 export function calculateSpecificity(pattern: string): number {
   const cleanPattern = pattern.trim();

@@ -2,6 +2,9 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { env } from '../config/env';
 import { AuthenticatedUser } from '../types/authorization.types';
 import { logger } from '../utils/logger';
+import { AuthenticationError, UpstreamServiceError } from '../errors/app-error';
+
+export { AuthenticationError, UpstreamServiceError };
 
 export type KeySource = Parameters<typeof jwtVerify>[1];
 
@@ -11,23 +14,16 @@ export interface TokenServiceOptions {
   keySource?: KeySource;
 }
 
-export class AuthenticationError extends Error {
-  public statusCode: number;
-  constructor(message: string, statusCode = 401) {
-    super(message);
-    this.name = 'AuthenticationError';
-    this.statusCode = statusCode;
-  }
-}
-
 export class TokenService {
   private issuerUrl?: string;
   private audience?: string;
   private keySource?: KeySource;
 
   constructor(options?: TokenServiceOptions) {
-    this.issuerUrl = options?.issuerUrl ?? env.AUTH0_ISSUER_URL;
-    this.audience = options?.audience ?? env.AUTH0_AUDIENCE;
+    this.issuerUrl =
+      options && 'issuerUrl' in options ? options.issuerUrl : env.AUTH0_ISSUER_URL;
+    this.audience =
+      options && 'audience' in options ? options.audience : env.AUTH0_AUDIENCE;
     this.keySource = options?.keySource;
 
     // If no custom keySource provided and issuerUrl is configured, initialize remote JWKS
@@ -79,6 +75,8 @@ export class TokenService {
   /**
    * Verifies an OAuth2 JWT access token using jose.
    * Enforces signature verification, expiration, issuer, audience, and required claims.
+   *
+   * Distinguishes upstream network/JWKS errors (503/502) from invalid client tokens (401).
    */
   public async verifyToken(token: string): Promise<AuthenticatedUser> {
     if (!token || typeof token !== 'string' || token.trim().length === 0) {
@@ -113,23 +111,61 @@ export class TokenService {
         claims: payload as Record<string, unknown>,
       };
     } catch (err: unknown) {
-      if (err instanceof AuthenticationError) {
+      if (err instanceof AuthenticationError || err instanceof UpstreamServiceError) {
         throw err;
       }
 
-      const error = err as { code?: string; message?: string };
-      logger.debug({ errorCode: error.code, message: error.message }, 'JWT verification failed');
+      const error = err as {
+        code?: string;
+        message?: string;
+        name?: string;
+        cause?: { code?: string; message?: string };
+      };
+      logger.debug(
+        { errorCode: error.code, name: error.name, message: error.message },
+        'JWT verification failed',
+      );
 
+      // Check for upstream JWKS network / fetch timeouts / connectivity failures
+      const isUpstreamNetworkError =
+        error.code === 'ERR_JWKS_TIMEOUT' ||
+        error.code === 'ECONNREFUSED' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ENOTFOUND' ||
+        error.code === 'EAI_AGAIN' ||
+        error.code === 'UND_ERR_CONNECT_TIMEOUT' ||
+        error.name === 'FetchError' ||
+        (error instanceof TypeError && error.message.includes('fetch failed')) ||
+        (typeof error.message === 'string' &&
+          /fetch failed|network|socket|timeout|getaddrinfo|econnrefused/i.test(error.message)) ||
+        (error.cause &&
+          typeof error.cause === 'object' &&
+          ('code' in error.cause || 'message' in error.cause) &&
+          /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|timeout|fetch failed/i.test(
+            `${error.cause.code || ''} ${error.cause.message || ''}`,
+          ));
+
+      if (isUpstreamNetworkError) {
+        throw new UpstreamServiceError(
+          'Authentication provider key service is temporarily unavailable',
+          503,
+        );
+      }
+
+      // Client-side token validation errors (401)
       if (error.code === 'ERR_JWT_EXPIRED') {
         throw new AuthenticationError('Access token has expired');
       }
       if (error.code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') {
         throw new AuthenticationError('Access token claim validation failed (issuer or audience)');
       }
-      if (error.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') {
+      if (
+        error.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' ||
+        error.code === 'ERR_JWKS_NO_MATCHING_KEY'
+      ) {
         throw new AuthenticationError('Invalid access token signature');
       }
-      if (error.code === 'ERR_JWS_INVALID') {
+      if (error.code === 'ERR_JWS_INVALID' || error.code === 'ERR_JWT_INVALID') {
         throw new AuthenticationError('Malformed access token');
       }
 

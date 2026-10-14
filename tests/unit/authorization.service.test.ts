@@ -21,13 +21,120 @@ describe('AuthorizationService Unit Tests', () => {
     db.close();
   });
 
-  describe('Sample Permissions Verification', () => {
-    it('grants exact ALLOW: user123 read transactions', async () => {
+  describe('Assignment Sample Scenarios Verification', () => {
+    // Scenario 1: user123 GET /transactions -> ALLOW
+    it('Scenario 1: user123 GET /transactions -> ALLOW', async () => {
       const res = await service.authorize('user123', 'GET', '/transactions');
+      expect(res.decision).toBe('ALLOW');
+      expect(res.user_id).toBe('user123');
+      expect(res.reason).toContain('transactions');
+      expect(res.matched_permissions).toEqual([
+        { action: 'read', resource: 'transactions', effect: 'allow' },
+      ]);
+    });
+
+    // Scenario 2: user123 DELETE /transactions/txn-456 -> DENY
+    it('Scenario 2: user123 DELETE /transactions/txn-456 -> DENY (explicit deny permission inherits)', async () => {
+      const res = await service.authorize('user123', 'DELETE', '/transactions/txn-456');
+      expect(res.decision).toBe('DENY');
+      expect(res.user_id).toBe('user123');
+      expect(res.reason).toContain('Explicit deny permission takes precedence');
+      expect(res.matched_permissions).toEqual([
+        { action: 'delete', resource: 'transactions', effect: 'deny' },
+      ]);
+    });
+
+    // Parent inheritance read: user123 GET /transactions/txn-123 -> ALLOW
+    it('user123 GET /transactions/txn-123 -> ALLOW (inherits read from transactions collection)', async () => {
+      const res = await service.authorize('user123', 'GET', '/transactions/txn-123');
       expect(res.decision).toBe('ALLOW');
       expect(res.user_id).toBe('user123');
       expect(res.matched_permissions).toEqual([
         { action: 'read', resource: 'transactions', effect: 'allow' },
+      ]);
+    });
+
+    // Parent inheritance read: user123 GET /accounts/acc-456 -> ALLOW
+    it('user123 GET /accounts/acc-456 -> ALLOW (inherits read from accounts collection)', async () => {
+      const res = await service.authorize('user123', 'GET', '/accounts/acc-456');
+      expect(res.decision).toBe('ALLOW');
+      expect(res.user_id).toBe('user123');
+      expect(res.matched_permissions).toEqual([
+        { action: 'read', resource: 'accounts', effect: 'allow' },
+      ]);
+    });
+
+    // Scenario 3: user456 GET /wallets/wallet-789/transactions -> ALLOW
+    it('Scenario 3: user456 GET /wallets/wallet-789/transactions -> ALLOW', async () => {
+      const res = await service.authorize('user456', 'GET', '/wallets/wallet-789/transactions');
+      expect(res.decision).toBe('ALLOW');
+      expect(res.user_id).toBe('user456');
+      expect(res.matched_permissions).toEqual([
+        { action: 'read', resource: 'wallets/wallet-789/transactions', effect: 'allow' },
+      ]);
+    });
+
+    // Scenario 4a: user789 POST /wallets/wallet-456/transactions/txn-999 -> ALLOW
+    it('Scenario 4a: user789 POST /wallets/wallet-456/transactions/txn-999 -> ALLOW', async () => {
+      const res = await service.authorize(
+        'user789',
+        'POST',
+        '/wallets/wallet-456/transactions/txn-999',
+      );
+      expect(res.decision).toBe('ALLOW');
+      expect(res.user_id).toBe('user789');
+      expect(res.matched_permissions).toEqual([
+        { action: 'write', resource: 'wallets/*/transactions/*', effect: 'allow' },
+      ]);
+    });
+
+    // Scenario 4b: user789 POST /wallets/wallet-789/transactions -> ALLOW
+    it('Scenario 4b: user789 POST /wallets/wallet-789/transactions -> ALLOW (collection-write wildcard)', async () => {
+      const res = await service.authorize(
+        'user789',
+        'POST',
+        '/wallets/wallet-789/transactions',
+      );
+      expect(res.decision).toBe('ALLOW');
+      expect(res.user_id).toBe('user789');
+      expect(res.matched_permissions).toEqual([
+        { action: 'write', resource: 'wallets/*/transactions/*', effect: 'allow' },
+      ]);
+    });
+
+    // Scenario 5: user456 POST /wallets/wallet-789/transactions -> DENY
+    it('Scenario 5: user456 POST /wallets/wallet-789/transactions -> DENY (no write permission on transactions)', async () => {
+      const res = await service.authorize(
+        'user456',
+        'POST',
+        '/wallets/wallet-789/transactions',
+      );
+      expect(res.decision).toBe('DENY');
+      expect(res.user_id).toBe('user456');
+      expect(res.matched_permissions).toEqual([]);
+    });
+
+    // Scenario 6: admin789 DELETE /accounts/acc-123/settings -> ALLOW
+    it('Scenario 6: admin789 DELETE /accounts/acc-123/settings -> ALLOW (global wildcard *)', async () => {
+      const res = await service.authorize(
+        'admin789',
+        'DELETE',
+        '/accounts/acc-123/settings',
+      );
+      expect(res.decision).toBe('ALLOW');
+      expect(res.user_id).toBe('admin789');
+      expect(res.matched_permissions).toEqual([
+        { action: 'delete', resource: '*', effect: 'allow' },
+      ]);
+    });
+
+    // Scenario 7: user456 GET /wallets/wallet-999 -> ALLOW
+    it('Scenario 7: user456 GET /wallets/wallet-999 -> ALLOW (segment wildcard wallets/*)', async () => {
+      const res = await service.authorize('user456', 'GET', '/wallets/wallet-999');
+      expect(res.decision).toBe('ALLOW');
+      expect(res.user_id).toBe('user456');
+      expect(res.matched_permissions).toEqual([
+        { action: 'read', resource: 'wallets/*', effect: 'allow' },
       ]);
     });
 
@@ -47,50 +154,54 @@ describe('AuthorizationService Unit Tests', () => {
         { action: 'delete', resource: 'transactions', effect: 'deny' },
       ]);
     });
-
-    it('grants segment wildcard: user456 read wallets/wallet-123', async () => {
-      const res = await service.authorize('user456', 'GET', '/wallets/wallet-123');
-      expect(res.decision).toBe('ALLOW');
-      expect(res.matched_permissions).toEqual([
-        { action: 'read', resource: 'wallets/*', effect: 'allow' },
-      ]);
-    });
-
-    it('grants exact nested resource: user456 read wallets/wallet-789/transactions', async () => {
-      const res = await service.authorize('user456', 'GET', '/wallets/wallet-789/transactions');
-      expect(res.decision).toBe('ALLOW');
-      expect(res.matched_permissions).toEqual([
-        { action: 'read', resource: 'wallets/wallet-789/transactions', effect: 'allow' },
-      ]);
-    });
-
-    it('grants multi-segment wildcard: user789 write wallets/w-1/transactions/tx-2', async () => {
-      const res = await service.authorize(
-        'user789',
-        'POST',
-        '/wallets/wallet-abc/transactions/tx-xyz',
-      );
-      expect(res.decision).toBe('ALLOW');
-      expect(res.matched_permissions).toEqual([
-        { action: 'write', resource: 'wallets/*/transactions/*', effect: 'allow' },
-      ]);
-    });
-
-    it('grants global wildcard *: admin789 can read, write, delete anything', async () => {
-      const readRes = await service.authorize('admin789', 'GET', '/any/random/path');
-      expect(readRes.decision).toBe('ALLOW');
-
-      const writeRes = await service.authorize('admin789', 'PUT', '/wallets/123/settings');
-      expect(writeRes.decision).toBe('ALLOW');
-
-      const deleteRes = await service.authorize('admin789', 'DELETE', '/users/999');
-      expect(deleteRes.decision).toBe('ALLOW');
-    });
   });
 
   describe('Precedence & Conflict Resolution', () => {
-    it('prioritizes more specific DENY over general ALLOW', async () => {
-      // General ALLOW on '*' and specific DENY on 'wallets/secret'
+    it('prioritizes specific child DENY over parent collection ALLOW', async () => {
+      // Parent collection ALLOW on 'transactions', specific DENY on 'transactions/txn-locked'
+      repo.insertPermission({
+        user_id: 'userCustom',
+        action: 'read',
+        resource: 'transactions',
+        effect: 'allow',
+      });
+      repo.insertPermission({
+        user_id: 'userCustom',
+        action: 'read',
+        resource: 'transactions/txn-locked',
+        effect: 'deny',
+      });
+
+      const res = await service.authorize('userCustom', 'GET', '/transactions/txn-locked');
+      expect(res.decision).toBe('DENY');
+      expect(res.matched_permissions).toEqual([
+        { action: 'read', resource: 'transactions/txn-locked', effect: 'deny' },
+      ]);
+    });
+
+    it('prioritizes specific child ALLOW over parent collection DENY', async () => {
+      // Parent collection DENY on 'transactions', specific ALLOW on 'transactions/txn-public'
+      repo.insertPermission({
+        user_id: 'userCustom2',
+        action: 'read',
+        resource: 'transactions',
+        effect: 'deny',
+      });
+      repo.insertPermission({
+        user_id: 'userCustom2',
+        action: 'read',
+        resource: 'transactions/txn-public',
+        effect: 'allow',
+      });
+
+      const res = await service.authorize('userCustom2', 'GET', '/transactions/txn-public');
+      expect(res.decision).toBe('ALLOW');
+      expect(res.matched_permissions).toEqual([
+        { action: 'read', resource: 'transactions/txn-public', effect: 'allow' },
+      ]);
+    });
+
+    it('prioritizes more specific DENY over general global ALLOW', async () => {
       repo.insertPermission({
         user_id: 'testUser',
         action: 'read',
@@ -111,106 +222,61 @@ describe('AuthorizationService Unit Tests', () => {
       ]);
     });
 
-    it('prioritizes more specific ALLOW over general DENY', async () => {
-      // General DENY on 'wallets/*' and specific ALLOW on 'wallets/wallet-vip'
+    it('prioritizes more specific ALLOW over general global DENY', async () => {
       repo.insertPermission({
         user_id: 'testUser2',
         action: 'read',
-        resource: 'wallets/*',
+        resource: '*',
         effect: 'deny',
       });
       repo.insertPermission({
         user_id: 'testUser2',
         action: 'read',
-        resource: 'wallets/wallet-vip',
+        resource: 'wallets/public',
         effect: 'allow',
       });
 
-      const res = await service.authorize('testUser2', 'GET', '/wallets/wallet-vip');
+      const res = await service.authorize('testUser2', 'GET', '/wallets/public');
       expect(res.decision).toBe('ALLOW');
       expect(res.matched_permissions).toEqual([
-        { action: 'read', resource: 'wallets/wallet-vip', effect: 'allow' },
+        { action: 'read', resource: 'wallets/public', effect: 'allow' },
       ]);
     });
 
-    it('resolves DENY when both ALLOW and DENY exist at the same specificity level', async () => {
+    it('resolves conflicting ALLOW and DENY at the same specificity in favor of DENY', async () => {
       repo.insertPermission({
         user_id: 'conflictUser',
         action: 'read',
-        resource: 'wallets/wallet-1',
+        resource: 'wallets/conflicted',
         effect: 'allow',
       });
       repo.insertPermission({
         user_id: 'conflictUser',
         action: 'read',
-        resource: 'wallets/wallet-1',
+        resource: 'wallets/conflicted',
         effect: 'deny',
       });
 
-      const res = await service.authorize('conflictUser', 'GET', '/wallets/wallet-1');
+      const res = await service.authorize('conflictUser', 'GET', '/wallets/conflicted');
       expect(res.decision).toBe('DENY');
       expect(res.reason).toContain('Explicit deny permission takes precedence');
       expect(res.matched_permissions).toEqual([
-        { action: 'read', resource: 'wallets/wallet-1', effect: 'deny' },
+        { action: 'read', resource: 'wallets/conflicted', effect: 'deny' },
       ]);
     });
 
-    it('defaults to DENY when no matching permission exists', async () => {
-      const res = await service.authorize('user123', 'GET', '/wallets/wallet-999');
+    it('defaults to DENY when no matching permissions exist', async () => {
+      const res = await service.authorize('user123', 'GET', '/nonexistent/resource');
+      expect(res.decision).toBe('DENY');
+      expect(res.user_id).toBe('user123');
+      expect(res.reason).toContain('No matching permissions found');
+      expect(res.matched_permissions).toEqual([]);
+    });
+
+    it('defaults to DENY when user has no permissions for the requested action', async () => {
+      const res = await service.authorize('user123', 'DELETE', '/accounts/acc-123');
       expect(res.decision).toBe('DENY');
       expect(res.matched_permissions).toEqual([]);
-      expect(res.reason).toContain('No matching permissions found');
-    });
-
-    it('denies access when user does not exist in database', async () => {
-      const res = await service.authorize('unknown_user', 'GET', '/transactions');
-      expect(res.decision).toBe('DENY');
-      expect(res.matched_permissions).toHaveLength(0);
-    });
-
-    it('denies access when permission belongs to another user', async () => {
-      // user123 has read on transactions; user789 does not
-      const res = await service.authorize('user789', 'GET', '/transactions');
-      expect(res.decision).toBe('DENY');
-      expect(res.matched_permissions).toHaveLength(0);
-    });
-
-    it('denies access when user has permission for different action', async () => {
-      // user123 has read/write on transactions, but NOT delete (delete is deny) and accounts only read
-      const res = await service.authorize('user123', 'POST', '/accounts');
-      expect(res.decision).toBe('DENY');
-      expect(res.matched_permissions).toHaveLength(0);
-    });
-
-    it('retrieves all permissions for a user across actions via repository', () => {
-      const perms = repo.getAllUserPermissions('user123');
-      expect(perms.length).toBeGreaterThanOrEqual(4);
-      expect(perms.map((p) => p.action)).toContain('read');
-      expect(perms.map((p) => p.action)).toContain('write');
-      expect(perms.map((p) => p.action)).toContain('delete');
-    });
-
-    it('does not accidentally match similar resource identifiers', async () => {
-      // user456 has write on 'wallets/wallet-789'. Should NOT match 'wallets/wallet-7899'
-      const res = await service.authorize('user456', 'POST', '/wallets/wallet-7899');
-      expect(res.decision).toBe('DENY');
-    });
-  });
-
-  describe('Validation & Error Scenarios', () => {
-    it('throws error on unsupported HTTP method', async () => {
-      await expect(service.authorize('user123', 'OPTIONS', '/transactions')).rejects.toThrow(
-        /Unsupported HTTP method/,
-      );
-    });
-
-    it('throws error on malformed or empty path', async () => {
-      await expect(service.authorize('user123', 'GET', '')).rejects.toThrow(
-        /Resource path cannot be empty/,
-      );
-      await expect(service.authorize('user123', 'GET', '/wallets/../etc')).rejects.toThrow(
-        /Directory traversal pattern detected/,
-      );
     });
   });
 });

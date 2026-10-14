@@ -1,10 +1,21 @@
 import { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
-import { AuthenticationError } from '../services/token.service';
+import { AppError } from '../errors/app-error';
 import { logger } from '../utils/logger';
 
+/**
+ * Central Error Handler Middleware
+ *
+ * Replaces fragile error-message string matching with typed application errors.
+ * Guarantees that:
+ * 1. Zod schema validation errors return structured 400 Bad Request.
+ * 2. Malformed JSON payloads return 400 Bad Request.
+ * 3. Typed AppErrors (BadRequestError, AuthenticationError, UpstreamServiceError)
+ *    map deterministically to their status codes without exposing internals.
+ * 4. Unexpected server failures return sanitized 500 responses without leaking stack traces.
+ */
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
-  // Handle Zod validation errors
+  // 1. Handle Zod validation errors
   if (err instanceof ZodError) {
     res.status(400).json({
       error: 'Bad Request',
@@ -18,34 +29,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
-  // Handle Authentication errors (401)
-  if (err instanceof AuthenticationError) {
-    res.status(err.statusCode).json({
-      error: err.statusCode === 401 ? 'Unauthorized' : 'Configuration Error',
-      message: err.message,
-      statusCode: err.statusCode,
-    });
-    return;
-  }
-
-  // Handle resource path and method validation errors
-  if (err instanceof Error) {
-    if (
-      err.message.includes('Unsupported HTTP method') ||
-      err.message.includes('Resource path') ||
-      err.message.includes('Directory traversal') ||
-      err.message.includes('Malformed URL-encoded')
-    ) {
-      res.status(400).json({
-        error: 'Bad Request',
-        message: err.message,
-        statusCode: 400,
-      });
-      return;
-    }
-  }
-
-  // Handle syntax error for malformed JSON bodies
+  // 2. Handle syntax error for malformed JSON bodies
   if (err instanceof SyntaxError && 'status' in err && (err as { status: number }).status === 400) {
     res.status(400).json({
       error: 'Bad Request',
@@ -55,7 +39,17 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
-  // Unhandled / Internal Server Errors (500)
+  // 3. Handle typed application errors
+  if (err instanceof AppError) {
+    res.status(err.statusCode).json({
+      error: err.errorType,
+      message: err.message,
+      statusCode: err.statusCode,
+    });
+    return;
+  }
+
+  // 4. Unhandled / Internal Server Errors (500) - Sanitized
   logger.error({ err }, 'Unhandled application error');
 
   res.status(500).json({

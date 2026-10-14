@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { generateKeyPair, SignJWT } from 'jose';
-import { AuthenticationError, TokenService, KeySource } from '../../src/services/token.service';
+import {
+  AuthenticationError,
+  UpstreamServiceError,
+  TokenService,
+  KeySource,
+} from '../../src/services/token.service';
 
 type KeyType = Awaited<ReturnType<typeof generateKeyPair>>['privateKey'];
 
@@ -101,21 +106,26 @@ describe('TokenService Unit Tests', () => {
     expect(user.userId).toBe('admin789');
   });
 
-  it('rejects an expired token', async () => {
+  it('rejects an expired token with 401 AuthenticationError', async () => {
     const tokenService = new TokenService({
       issuerUrl: validIssuer,
       audience: validAudience,
       keySource: publicKey as KeySource,
     });
 
-    // Token expired in the past
     const token = await createToken({ expiresIn: '-10s' });
 
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(AuthenticationError);
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(/expired/);
+    try {
+      await tokenService.verifyToken(token);
+      expect.fail('Expected token verification to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect((err as AuthenticationError).statusCode).toBe(401);
+      expect((err as AuthenticationError).message).toMatch(/expired/);
+    }
   });
 
-  it('rejects token signed with an invalid signature', async () => {
+  it('rejects token signed with an invalid signature with 401', async () => {
     const tokenService = new TokenService({
       issuerUrl: validIssuer,
       audience: validAudience,
@@ -124,11 +134,17 @@ describe('TokenService Unit Tests', () => {
 
     const token = await createToken({ key: wrongPrivateKey });
 
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(AuthenticationError);
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(/signature/);
+    try {
+      await tokenService.verifyToken(token);
+      expect.fail('Expected token verification to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect((err as AuthenticationError).statusCode).toBe(401);
+      expect((err as AuthenticationError).message).toMatch(/signature/);
+    }
   });
 
-  it('rejects token with wrong issuer', async () => {
+  it('rejects token with wrong issuer with 401', async () => {
     const tokenService = new TokenService({
       issuerUrl: validIssuer,
       audience: validAudience,
@@ -137,11 +153,17 @@ describe('TokenService Unit Tests', () => {
 
     const token = await createToken({ issuer: 'https://malicious-issuer.com/' });
 
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(AuthenticationError);
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(/claim validation/);
+    try {
+      await tokenService.verifyToken(token);
+      expect.fail('Expected token verification to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect((err as AuthenticationError).statusCode).toBe(401);
+      expect((err as AuthenticationError).message).toMatch(/claim validation/);
+    }
   });
 
-  it('rejects token with wrong audience', async () => {
+  it('rejects token with wrong audience with 401', async () => {
     const tokenService = new TokenService({
       issuerUrl: validIssuer,
       audience: validAudience,
@@ -150,11 +172,17 @@ describe('TokenService Unit Tests', () => {
 
     const token = await createToken({ audience: 'https://wrong-audience.com' });
 
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(AuthenticationError);
-    await expect(tokenService.verifyToken(token)).rejects.toThrow(/claim validation/);
+    try {
+      await tokenService.verifyToken(token);
+      expect.fail('Expected token verification to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect((err as AuthenticationError).statusCode).toBe(401);
+      expect((err as AuthenticationError).message).toMatch(/claim validation/);
+    }
   });
 
-  it('rejects token missing sub claim', async () => {
+  it('rejects token missing sub claim with 401', async () => {
     const tokenService = new TokenService({
       issuerUrl: validIssuer,
       audience: validAudience,
@@ -168,12 +196,17 @@ describe('TokenService Unit Tests', () => {
       .setExpirationTime('1h')
       .sign(privateKey);
 
-    await expect(tokenService.verifyToken(await token)).rejects.toThrow(
-      /missing required identity claim/,
-    );
+    try {
+      await tokenService.verifyToken(await token);
+      expect.fail('Expected token verification to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect((err as AuthenticationError).statusCode).toBe(401);
+      expect((err as AuthenticationError).message).toMatch(/missing required identity claim/);
+    }
   });
 
-  it('rejects malformed token string', async () => {
+  it('rejects malformed token string with 401', async () => {
     const tokenService = new TokenService({
       issuerUrl: validIssuer,
       audience: validAudience,
@@ -184,5 +217,127 @@ describe('TokenService Unit Tests', () => {
       AuthenticationError,
     );
     await expect(tokenService.verifyToken('')).rejects.toThrow(/missing or empty/);
+  });
+
+  it('throws 500 when Auth0 is not configured', async () => {
+    const unconfiguredService = new TokenService({
+      issuerUrl: undefined,
+      audience: undefined,
+      keySource: undefined,
+    });
+
+    try {
+      await unconfiguredService.verifyToken('some.valid.looking.token');
+      expect.fail('Expected verifyToken to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect((err as AuthenticationError).statusCode).toBe(500);
+      expect((err as AuthenticationError).message).toContain('Auth0 is not configured');
+    }
+  });
+
+  describe('Upstream JWKS Error Handling', () => {
+    it('maps JWKS network timeout to 503 UpstreamServiceError', async () => {
+      // Mock a KeySource function that throws a JWKS timeout error
+      const mockKeySource: KeySource = async () => {
+        const timeoutErr = new Error('JWKS connection timed out') as Error & { code?: string };
+        timeoutErr.code = 'ERR_JWKS_TIMEOUT';
+        throw timeoutErr;
+      };
+
+      const tokenService = new TokenService({
+        issuerUrl: validIssuer,
+        audience: validAudience,
+        keySource: mockKeySource,
+      });
+
+      const token = await createToken({ sub: 'user123' });
+
+      try {
+        await tokenService.verifyToken(token);
+        expect.fail('Expected verifyToken to throw UpstreamServiceError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(UpstreamServiceError);
+        expect((err as UpstreamServiceError).statusCode).toBe(503);
+        expect((err as UpstreamServiceError).message).toContain(
+          'Authentication provider key service is temporarily unavailable',
+        );
+      }
+    });
+
+    it('maps network connection failure (ECONNREFUSED) to 503 UpstreamServiceError', async () => {
+      const mockKeySource: KeySource = async () => {
+        const netErr = new Error('connect ECONNREFUSED 127.0.0.1:443') as Error & {
+          code?: string;
+        };
+        netErr.code = 'ECONNREFUSED';
+        throw netErr;
+      };
+
+      const tokenService = new TokenService({
+        issuerUrl: validIssuer,
+        audience: validAudience,
+        keySource: mockKeySource,
+      });
+
+      const token = await createToken({ sub: 'user123' });
+
+      try {
+        await tokenService.verifyToken(token);
+        expect.fail('Expected verifyToken to throw UpstreamServiceError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(UpstreamServiceError);
+        expect((err as UpstreamServiceError).statusCode).toBe(503);
+      }
+    });
+
+    it('maps fetch failure to 503 UpstreamServiceError', async () => {
+      const mockKeySource: KeySource = async () => {
+        const fetchErr = new TypeError('fetch failed');
+        (fetchErr as unknown as { cause: Error }).cause = new Error('getaddrinfo ENOTFOUND auth0.com');
+        throw fetchErr;
+      };
+
+      const tokenService = new TokenService({
+        issuerUrl: validIssuer,
+        audience: validAudience,
+        keySource: mockKeySource,
+      });
+
+      const token = await createToken({ sub: 'user123' });
+
+      try {
+        await tokenService.verifyToken(token);
+        expect.fail('Expected verifyToken to throw UpstreamServiceError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(UpstreamServiceError);
+        expect((err as UpstreamServiceError).statusCode).toBe(503);
+      }
+    });
+
+    it('maps no matching JWKS key to 401 AuthenticationError (client token error, not upstream error)', async () => {
+      const mockKeySource: KeySource = async () => {
+        const noKeyErr = new Error('No matching key found in JWKS') as Error & { code?: string };
+        noKeyErr.code = 'ERR_JWKS_NO_MATCHING_KEY';
+        throw noKeyErr;
+      };
+
+      const tokenService = new TokenService({
+        issuerUrl: validIssuer,
+        audience: validAudience,
+        keySource: mockKeySource,
+      });
+
+      const token = await createToken({ sub: 'user123' });
+
+      try {
+        await tokenService.verifyToken(token);
+        expect.fail('Expected verifyToken to throw 401 AuthenticationError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(AuthenticationError);
+        expect((err as AuthenticationError).statusCode).toBe(401);
+        expect((err as AuthenticationError).message).toContain('Invalid access token signature');
+      }
+    });
   });
 });

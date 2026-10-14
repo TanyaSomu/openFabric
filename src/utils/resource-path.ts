@@ -1,4 +1,5 @@
 import { Action, HttpMethod } from '../types/authorization.types';
+import { BadRequestError } from '../errors/app-error';
 
 const METHOD_ACTION_MAP: Record<HttpMethod, Action> = {
   GET: 'read',
@@ -10,18 +11,18 @@ const METHOD_ACTION_MAP: Record<HttpMethod, Action> = {
 
 /**
  * Maps an HTTP method string to its corresponding authorization Action.
- * Case-insensitive. Rejects unknown or unsupported methods.
+ * Case-insensitive. Rejects unknown or unsupported methods with BadRequestError.
  */
 export function mapMethodToAction(rawMethod: string): Action {
   if (!rawMethod || typeof rawMethod !== 'string') {
-    throw new Error('HTTP method must be a non-empty string');
+    throw new BadRequestError('HTTP method must be a non-empty string');
   }
 
   const method = rawMethod.trim().toUpperCase() as HttpMethod;
   const action = METHOD_ACTION_MAP[method];
 
   if (!action) {
-    throw new Error(
+    throw new BadRequestError(
       `Unsupported HTTP method '${rawMethod}'. Allowed methods: GET, POST, PUT, PATCH, DELETE`,
     );
   }
@@ -41,17 +42,17 @@ export function mapMethodToAction(rawMethod: string): Action {
  */
 export function normalizeResourcePath(rawPath: string): string {
   if (rawPath === undefined || rawPath === null || typeof rawPath !== 'string') {
-    throw new Error('Resource path must be a string');
+    throw new BadRequestError('Resource path must be a string');
   }
 
   const trimmed = rawPath.trim();
   if (trimmed.length === 0) {
-    throw new Error('Resource path cannot be empty');
+    throw new BadRequestError('Resource path cannot be empty');
   }
 
   // Prevent null-byte injection
   if (trimmed.includes('\0')) {
-    throw new Error('Resource path contains forbidden null byte characters');
+    throw new BadRequestError('Resource path contains forbidden null byte characters');
   }
 
   // Strip query string and hash fragment
@@ -61,7 +62,7 @@ export function normalizeResourcePath(rawPath: string): string {
   const rawSegments = pathWithoutQuery.split('/').filter((seg) => seg.length > 0);
 
   if (rawSegments.length === 0) {
-    throw new Error('Resource path must contain at least one valid resource identifier');
+    throw new BadRequestError('Resource path must contain at least one valid resource identifier');
   }
 
   const normalizedSegments: string[] = [];
@@ -71,7 +72,7 @@ export function normalizeResourcePath(rawPath: string): string {
     try {
       decodedSeg = decodeURIComponent(seg);
     } catch {
-      throw new Error(`Malformed URL-encoded segment in path: '${seg}'`);
+      throw new BadRequestError(`Malformed URL-encoded segment in path: '${seg}'`);
     }
 
     // Security check: Directory traversal
@@ -81,7 +82,9 @@ export function normalizeResourcePath(rawPath: string): string {
       decodedSeg.includes('/') ||
       decodedSeg.includes('\\')
     ) {
-      throw new Error(`Directory traversal pattern detected in path segment: '${decodedSeg}'`);
+      throw new BadRequestError(
+        `Directory traversal pattern detected in path segment: '${decodedSeg}'`,
+      );
     }
 
     normalizedSegments.push(decodedSeg);

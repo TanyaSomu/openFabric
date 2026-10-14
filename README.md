@@ -439,14 +439,27 @@ Paths and resource patterns are evaluated using **safe segment-based matching**,
 * URL-encoded segments are decoded: `/wallets/wallet%2D1` -> `wallets/wallet-1`
 * Path traversal tokens (`..`, `.`) are strictly rejected.
 
-### Wildcard Matching Semantics
+### Wildcard Matching & Hierarchical Inheritance Semantics
 
-1. **Global Resource Wildcard (`*`)**: Matches any resource path regardless of segment count (e.g. `admin789` with `*` matches `transactions`, `wallets/123`, `a/b/c/d`).
-2. **Segment Wildcard (`*`)**: Matches exactly **one** path segment at that position.
-   - `wallets/*` matches `wallets/wallet-123` and `wallets/wallet-456`.
+1. **Global Resource Wildcard (`*`)**: Matches any resource path regardless of segment count (e.g., `admin789` with `*` matches `transactions`, `wallets/wallet-789`, `accounts/acc-123/settings`, or `a/b/c/d`). Specificity score = `0`.
+2. **Segment Wildcard (`*`)**: Matches exactly **one** non-empty path segment at that position within an equal segment count.
+   - `wallets/*` matches `wallets/wallet-123` and `wallets/wallet-999` (score: 10 + 1 = 11).
    - `wallets/*` does **not** match `wallets/wallet-123/transactions` (requires matching segment count).
-3. **Multi-Segment Wildcard (`wallets/*/transactions/*`)**: Matches any path with 4 segments where segments 0 and 2 match literally and segments 1 and 3 are wildcards.
-4. **Exact Match**: `wallets/wallet-789` matches only `wallets/wallet-789`. It does **not** match `wallets/wallet-7899`.
+3. **Multi-Segment Wildcard (`wallets/*/transactions/*`)**: Matches any path with 4 segments where segments 0 and 2 match literally and segments 1 and 3 are wildcards (score: 10 + 1 + 10 + 1 = 22).
+4. **Wildcard Collection-Write Matching (Scenario 4b)**:
+   - When a permission pattern ends in `/*` (e.g., `wallets/*/transactions/*`), it grants access to items inside that collection.
+   - In REST APIs, creating an item within a collection is performed by writing to the collection endpoint (`POST /wallets/wallet-789/transactions`).
+   - The permission matcher allows patterns ending in `/*` to match requests targeting the immediate parent collection.
+   - Unrelated collections (e.g., `/transfers`) or different resource depths do not match.
+5. **Hierarchical Parent-to-Child Resource Inheritance (Rule 4)**:
+   - Permissions configured on a collection resource automatically apply to member entity items within that collection:
+     - `transactions` applies to `transactions/txn-456` and `transactions/txn-123`.
+     - `accounts` applies to `accounts/acc-456`.
+     - `wallets` applies to `wallets/wallet-789`.
+     - `wallets/wallet-789/transactions` applies to `wallets/wallet-789/transactions/txn-456`.
+   - **Sub-Collection Isolation Boundary**: A permission on an entity instance (such as `wallets/wallet-789`) grants access to the wallet itself (e.g., wallet settings or properties), but does **not** cross into independent child collections like `transactions`. Transactions within a wallet require transaction-level permissions (`wallets/wallet-789/transactions`, `wallets/*/transactions/*`, or global `*`).
+   - **Item Wildcards Do Not Cascade**: Patterns ending in a wildcard segment (e.g., `wallets/*` or `wallets/*/transactions/*`) represent item-level patterns at that specific depth and do not cascade into arbitrary deeper subpaths.
+6. **Strict Segment Boundaries**: Substring or prefix matches across segment boundaries (e.g., `wallets/wallet-789` matching `wallets/wallet-7899` or `transactions` matching `transactions-archived`) are strictly forbidden.
 
 ---
 
@@ -460,15 +473,21 @@ The assignment specifies two fundamental rules:
 
 To eliminate ambiguity, this service implements the following deterministic algorithm:
 
-1. **Retrieve**: Query all permissions for the verified user and the mapped action.
-2. **Filter**: Identify all permission records matching the requested canonical resource path.
+1. **Retrieve**: Query all permissions for the verified user and the mapped action from SQLite.
+2. **Filter**: Identify all permission records matching the requested canonical resource path (including exact matches, wildcard collection matches, and inherited parent collection permissions).
 3. **Score Specificity**:
    - Global wildcard (`*`): Specificity = `0`
    - Segmented pattern: Each exact segment contributes `10` points; each wildcard segment (`*`) contributes `1` point.
-   - *Example for target `wallets/wallet-789/transactions`*:
-     - `*` -> Specificity `0`
-     - `wallets/*/transactions` -> Specificity `21` (10 + 1 + 10)
-     - `wallets/wallet-789/transactions` -> Specificity `30` (10 + 10 + 10)
+   - Specificity ranking examples:
+     - Target: `transactions/txn-456`
+       - `transactions/txn-456` (exact child): Specificity = `20` (10 + 10)
+       - `transactions/*` (wildcard child): Specificity = `11` (10 + 1)
+       - `transactions` (inherited parent collection): Specificity = `10`
+       - `*` (global wildcard): Specificity = `0`
+     - Target: `wallets/wallet-789/transactions`
+       - `wallets/wallet-789/transactions` (exact collection): Specificity = `30` (10 + 10 + 10)
+       - `wallets/*/transactions/*` (collection-write wildcard): Specificity = `22` (10 + 1 + 10 + 1)
+       - `*` (global wildcard): Specificity = `0`
 4. **Isolate Highest Level**: Filter only the matched permissions that achieve the maximum specificity score.
 5. **Conflict Resolution at Highest Specificity**:
    - If any `deny` exists at this highest specificity level, **DENY wins**.
@@ -479,6 +498,8 @@ To eliminate ambiguity, this service implements the following deterministic algo
 
 | Scenario | General Rule | Specific Rule | Target Resource | Decision | Rationale |
 | :--- | :--- | :--- | :--- | :---: | :--- |
+| **Child Deny Overrides Parent Allow** | `transactions` (ALLOW) | `transactions/txn-456` (DENY) | `transactions/txn-456` | **DENY** | Child rule (score 20) overrides parent collection rule (score 10). |
+| **Child Allow Overrides Parent Deny** | `transactions` (DENY) | `transactions/txn-123` (ALLOW) | `transactions/txn-123` | **ALLOW** | Child rule (score 20) overrides parent collection rule (score 10). |
 | **General Allow, Specific Deny** | `*` (ALLOW) | `wallets/secret` (DENY) | `wallets/secret` | **DENY** | Specific DENY (score 20) beats General ALLOW (score 0). |
 | **General Deny, Specific Allow** | `wallets/*` (DENY) | `wallets/wallet-vip` (ALLOW) | `wallets/wallet-vip` | **ALLOW** | Specific ALLOW (score 20) beats General DENY (score 11). |
 | **Same Specificity Conflict** | `transactions` (ALLOW) | `transactions` (DENY) | `transactions` | **DENY** | Both at score 10: Deny beats Allow. |
@@ -488,12 +509,26 @@ To eliminate ambiguity, this service implements the following deterministic algo
 
 ## 16. Error Handling & Security Architecture
 
-* **Never Expose Sensitive Internals**: Stack traces, JWT contents, database filepaths, and internal system details are never leaked in API responses.
-* **Separation of 401 vs Authorization DENY**:
-  * Invalid or expired tokens return `401 Unauthorized` without querying the permissions database.
-  * Legitimate users lacking authorization receive `200 OK` with `"decision": "DENY"`.
-* **Zero SQL Injection**: All queries utilize `better-sqlite3` prepared statements with parameter binding.
-* **Redacted Logs**: Pino automatically redacts `access_token`, `authorization` headers, and secrets from standard output and log files.
+### Strongly Typed Application Errors
+The service replaces fragile string matching with a formal typed error hierarchy (`src/errors/app-error.ts`):
+* `BadRequestError` (400): Malformed bodies, invalid JSON, unsupported HTTP methods, and directory traversal attempts.
+* `AuthenticationError` (401 / 500): Invalid signatures, expired tokens, forged tokens, missing `sub` claims, or unconfigured Auth0 environment.
+* `UpstreamServiceError` (502 / 503): Network timeouts, DNS resolution failures, or connection errors connecting to the trusted JWKS endpoint.
+
+### Upstream JWKS Error Handling
+* Network timeouts (`ERR_JWKS_TIMEOUT`, `ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND`, fetch aborts) are accurately categorized as `503 Service Unavailable` or `502 Bad Gateway`.
+* Unrecognized token keys (`ERR_JWKS_NO_MATCHING_KEY`) or invalid signatures are treated as client token verification failures (`401 Unauthorized`).
+* Internal network topology, socket addresses, and provider URLs are never exposed in error responses.
+
+### Sanitized 500 Internal Server Errors
+Unexpected server errors (e.g., unexpected SQLite errors) are caught by the central Express error handler, logged via Pino with full error context, and returned to clients as:
+```json
+{
+  "error": "Internal Server Error",
+  "message": "An unexpected internal error occurred",
+  "statusCode": 500
+}
+```
 
 ---
 
@@ -525,42 +560,248 @@ npm run format
 
 ### Test Coverage Highlights
 
-* **100%** coverage across Express routes, controllers, schemas, repositories, and authorization service.
-* **65 automated test cases**:
-  - JWT verification: valid tokens, expired tokens, forged signatures, invalid issuers, invalid audiences, missing `sub` claims, and malformed tokens.
-  - Resource normalization: path traversal prevention, double slash collapsing, URL decode attacks, null byte injections.
-  - Permission precedence: exact allow, exact deny, global wildcard, segment wildcard, nested wildcard, general allow + specific deny, general deny + specific allow, conflicts at equal specificity.
-  - HTTP API integration: ALLOW, DENY, 401 unauthorized, 400 validation error, 404 not found, 500 error sanitization, health check.
+* **94.21%** overall statement coverage across all application modules.
+* **100%** coverage across Express routes, controllers, error handlers, and permission repositories.
+* **90 automated test cases** across 6 test suites:
+  - `tests/unit/permission-matcher.test.ts` (17 tests): Exact matching, wildcard collection writes, hierarchical parent-to-child inheritance, boundary isolation, and specificity scoring.
+  - `tests/unit/authorization.service.test.ts` (19 tests): All assignment sample scenarios, precedence resolution, explicit denial inheritance, and equal-specificity conflicts.
+  - `tests/unit/token.service.test.ts` (14 tests): Valid tokens, Auth0 prefix normalization, custom claims, expired tokens, forged signatures, invalid issuer/audience, missing identity, upstream JWKS timeouts (503), network failures (503), and missing configuration (500).
+  - `tests/unit/resource-path.test.ts` (13 tests): Method mapping, path normalization, trailing slashes, URL decode safety, traversal blocking, and null byte rejection.
+  - `tests/unit/permission.repository.test.ts` (5 tests): Parameterized queries, action filtering, insert operations, and database error recovery.
+  - `tests/integration/authorize-api.test.ts` (22 tests): End-to-end HTTP API integration verifying all assignment scenarios, health checks, 401 client errors, 503 upstream errors, 400 validation errors, and sanitized 500 responses.
 
 ---
 
-## 18. Example cURL Commands
+## 18. Assignment Sample Scenarios & Verification
 
-### 1. Health Check
-```bash
-curl -i -X GET http://localhost:8080/health
-```
+All scenarios from the assignment specification (Pages 5–7) are verified with exact HTTP methods, resource paths, and expected decisions:
 
-### 2. Authorization Request (ALLOW)
+### Scenario 1: user123 Read Transactions (ALLOW)
 ```bash
 curl -i -X POST http://localhost:8080/authorize \
   -H "Content-Type: application/json" \
   -d '{
-    "access_token": "YOUR_AUTH0_ACCESS_TOKEN",
+    "access_token": "valid_token_for_user123",
+    "method": "GET",
+    "path": "/transactions"
+  }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "ALLOW",
+  "user_id": "user123",
+  "reason": "User has read permission for transactions",
+  "matched_permissions": [
+    {
+      "action": "read",
+      "resource": "transactions",
+      "effect": "allow"
+    }
+  ]
+}
+```
+
+### Scenario 2: user123 Explicit Deny on Nested Resource (DENY)
+```bash
+curl -i -X POST http://localhost:8080/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "valid_token_for_user123",
+    "method": "DELETE",
+    "path": "/transactions/txn-456"
+  }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "DENY",
+  "user_id": "user123",
+  "reason": "Explicit deny permission takes precedence at specificity level 10 for resource 'transactions/txn-456'",
+  "matched_permissions": [
+    {
+      "action": "delete",
+      "resource": "transactions",
+      "effect": "deny"
+    }
+  ]
+}
+```
+
+### Scenario 2b: user123 Inherited Read on Nested Resource (ALLOW)
+```bash
+curl -i -X POST http://localhost:8080/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "valid_token_for_user123",
+    "method": "GET",
+    "path": "/transactions/txn-123"
+  }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "ALLOW",
+  "user_id": "user123",
+  "reason": "User has read permission for transactions/txn-123",
+  "matched_permissions": [
+    {
+      "action": "read",
+      "resource": "transactions",
+      "effect": "allow"
+    }
+  ]
+}
+```
+
+### Scenario 3: user456 Specific Permission on Wallet Transactions (ALLOW)
+```bash
+curl -i -X POST http://localhost:8080/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "valid_token_for_user456",
     "method": "GET",
     "path": "/wallets/wallet-789/transactions"
   }'
 ```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "ALLOW",
+  "user_id": "user456",
+  "reason": "User has read permission for wallets/wallet-789/transactions",
+  "matched_permissions": [
+    {
+      "action": "read",
+      "resource": "wallets/wallet-789/transactions",
+      "effect": "allow"
+    }
+  ]
+}
+```
 
-### 3. Authorization Request (DENY)
+### Scenario 4a: user789 Write to Any Transaction Item (ALLOW)
 ```bash
 curl -i -X POST http://localhost:8080/authorize \
   -H "Content-Type: application/json" \
   -d '{
-    "access_token": "YOUR_AUTH0_ACCESS_TOKEN",
-    "method": "DELETE",
-    "path": "/transactions"
+    "access_token": "valid_token_for_user789",
+    "method": "POST",
+    "path": "/wallets/wallet-456/transactions/txn-999"
   }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "ALLOW",
+  "user_id": "user789",
+  "reason": "User has write permission for wallets/wallet-456/transactions/txn-999",
+  "matched_permissions": [
+    {
+      "action": "write",
+      "resource": "wallets/*/transactions/*",
+      "effect": "allow"
+    }
+  ]
+}
+```
+
+### Scenario 4b: user789 Write to Transaction Collection (ALLOW)
+```bash
+curl -i -X POST http://localhost:8080/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "valid_token_for_user789",
+    "method": "POST",
+    "path": "/wallets/wallet-789/transactions"
+  }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "ALLOW",
+  "user_id": "user789",
+  "reason": "User has write permission for wallets/wallet-789/transactions",
+  "matched_permissions": [
+    {
+      "action": "write",
+      "resource": "wallets/*/transactions/*",
+      "effect": "allow"
+    }
+  ]
+}
+```
+
+### Scenario 5: user456 Write to Wallet Transactions (DENY)
+```bash
+curl -i -X POST http://localhost:8080/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "valid_token_for_user456",
+    "method": "POST",
+    "path": "/wallets/wallet-789/transactions"
+  }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "DENY",
+  "user_id": "user456",
+  "reason": "No matching permissions found for resource 'wallets/wallet-789/transactions'",
+  "matched_permissions": []
+}
+```
+
+### Scenario 6: admin789 Global Wildcard Access (ALLOW)
+```bash
+curl -i -X POST http://localhost:8080/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "valid_token_for_admin789",
+    "method": "DELETE",
+    "path": "/accounts/acc-123/settings"
+  }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "ALLOW",
+  "user_id": "admin789",
+  "reason": "User has delete permission for accounts/acc-123/settings",
+  "matched_permissions": [
+    {
+      "action": "delete",
+      "resource": "*",
+      "effect": "allow"
+    }
+  ]
+}
+```
+
+### Scenario 7: user456 Wildcard Inheritance on Wallet (ALLOW)
+```bash
+curl -i -X POST http://localhost:8080/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "valid_token_for_user456",
+    "method": "GET",
+    "path": "/wallets/wallet-999"
+  }'
+```
+**Expected Response (200 OK):**
+```json
+{
+  "decision": "ALLOW",
+  "user_id": "user456",
+  "reason": "User has read permission for wallets/wallet-999",
+  "matched_permissions": [
+    {
+      "action": "read",
+      "resource": "wallets/*",
+      "effect": "allow"
+    }
+  ]
+}
 ```
 
 ---
@@ -574,9 +815,30 @@ curl -i -X POST http://localhost:8080/authorize \
 
 ---
 
-## 20. Known Limitations & Future Improvements
+## 20. Known Limitations & Video Demo Script
 
+### Known Limitations
 * **JWKS Caching & Invalidation**: Currently relies on `jose.createRemoteJWKSet`, which provides in-memory key caching. In distributed multi-region deployments, an external Redis cache could be added.
 * **Role-Based Access Control (RBAC)**: The current database directly maps permissions to `user_id`. A natural next step is adding a `roles` and `role_permissions` table to support groups and roles.
 * **Rate Limiting**: Can integrate `express-rate-limit` to throttle unauthenticated brute-force requests on `/authorize`.
-* **Audit Logging**: Persisting authorization decisions to an audit log table for compliance tracking.
+
+### Recommended 2–3 Minute Video Demo Recording Script
+To satisfy the take-home submission guideline (*"3. Provide a brief video demo (2-3 minutes) of your working solution"*):
+
+1. **Introduction (0:00 – 0:30)**:
+   - Introduce the service architecture: TypeScript, Express, SQLite (`better-sqlite3`), and `jose` for OAuth2 JWT verification.
+   - Mention the two core endpoints: `GET /health` and `POST /authorize`.
+2. **Database & Precedence Model (0:30 – 1:00)**:
+   - Show `database/init.sql` and the 11 seed permissions.
+   - Explain the deterministic precedence rules: specific rules beat general rules, deny beats allow at equal specificity, and collection writes (`wallets/*/transactions/*`) match `POST /wallets/wallet-789/transactions`.
+3. **Running the Live Tests (1:00 – 1:45)**:
+   - Run `npm test` and `npm run test:coverage` in the terminal to demonstrate that all 90 tests pass across 6 suites with >94% coverage.
+4. **Interactive cURL Walkthrough (1:45 – 2:30)**:
+   - Start the service (`npm run dev`).
+   - Execute Scenario 1 (`GET /transactions` -> ALLOW).
+   - Execute Scenario 2 (`DELETE /transactions/txn-456` -> explicit DENY).
+   - Execute Scenario 4b (`POST /wallets/wallet-789/transactions` -> ALLOW).
+   - Execute Scenario 5 (`POST /wallets/wallet-789/transactions` for user456 -> DENY).
+5. **Conclusion (2:30 – 2:45)**:
+   - Highlight error handling (400 validation, 401 unauthorized, 503 upstream JWKS timeout, sanitized 500s).
+
