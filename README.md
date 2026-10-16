@@ -877,7 +877,7 @@ To satisfy the take-home submission guideline (*"3. Provide a brief video demo (
    - Show `database/init.sql` and the 11 seed permissions.
    - Explain the deterministic precedence rules: specific rules beat general rules, deny beats allow at equal specificity, and collection writes (`wallets/*/transactions/*`) match `POST /wallets/wallet-789/transactions`.
 3. **Running the Live Automated Tests (0:45 – 1:30)**:
-   - Run `npm test` and `npm run test:coverage` in the terminal to demonstrate that all 92 automated backend tests pass across 6 suites with >94% statement coverage.
+   - Run `npm test` and `npm run test:coverage` in the terminal to demonstrate that all 94 automated backend tests pass across 6 suites with >94% statement coverage.
    - Run `cd frontend && npm test` to demonstrate all 17 frontend dashboard unit & integration tests passing.
 4. **Interactive Dashboard & Live API Walkthrough (1:30 – 2:30)**:
    - Open the web dashboard at `http://localhost:5174`.
