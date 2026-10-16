@@ -77,70 +77,66 @@ This project delivers a robust, secure, and fully tested reference implementatio
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Backend Language** | TypeScript (v6 / NodeNext) | Static typing, maintainability, and compile-time safety |
-| **Backend Runtime** | Node.js (v20+) | High-throughput asynchronous JavaScript runtime |
-| **Backend Framework** | Express.js (v5) | HTTP server, routing, and middleware pipeline |
+| **Language** | TypeScript (v6 / NodeNext) | Static typing, maintainability, and compile-time safety |
+| **Runtime** | Node.js (v20+) | High-throughput asynchronous JavaScript runtime |
+| **Framework** | Express.js (v5) | HTTP server, routing, and middleware pipeline |
 | **Database** | SQLite via `better-sqlite3` | Zero-latency embedded database with WAL mode |
 | **JWT & Crypto** | `jose` (v6) | Asymmetric token verification against remote JWKS |
 | **Validation** | `Zod` (v4) | Strict schema validation for HTTP payloads |
 | **Logging** | `Pino` & `pino-pretty` | Low-overhead structured JSON logging with token redaction |
-| **Backend Testing** | `Vitest` & `Supertest` | Unit and integration testing, V8 code coverage |
-| **Frontend Stack** | React (v18), TypeScript, Vite (v5) | Modern, lightweight authorization testing dashboard |
-| **Frontend Testing** | `Vitest`, `@testing-library/react` | Component, state, and API integration testing |
+| **Testing** | `Vitest` & `Supertest` | Unit and integration testing, V8 code coverage |
 | **Code Quality** | ESLint & Prettier | Automated code linting and style enforcement |
 
 ---
 
 ## 5. Architecture & Design
 
-The application follows a clean layered architecture with clear separation between the Policy Decision Point (PDP) backend and the testing dashboard frontend:
+The application follows a clean layered architecture with clear separation of concerns:
 
 ```
-                  ┌───────────────────────────────────────────┐
-                  │   Browser Dashboard (React + Vite)        │
-                  │   http://localhost:5174                   │
-                  └─────────────────────┬─────────────────────┘
-                                        │ GET /health | POST /authorize
-                                        ▼
-                  ┌───────────────────────────────────────────┐
-                  │    Express HTTP Middleware Stack (8080)   │
-                  │    (JSON Parser, Safe CORS, Error Handler)│
-                  └─────────────────────┬─────────────────────┘
-                                        │
-                                        ▼
-                  ┌───────────────────────────────────────────┐
-                  │           AuthorizeController             │
-                  └─────────────┬───────────────┬─────────────┘
-                                │               │
-              1. Validate Token │               │ 2. Authorize Request
-                                ▼               ▼
-                  ┌───────────────────┐   ┌───────────────────────────┐
-                  │   TokenService    │   │   AuthorizationService    │
-                  │  (jose + JWKS)    │   └─────────────┬─────────────┘
-                  └───────────────────┘                 │
-                                                        │ 3. Fetch Permissions
-                                                        ▼
-                                          ┌───────────────────────────┐
-                                          │   PermissionRepository    │
-                                          │    (better-sqlite3)       │
-                                          └─────────────┬─────────────┘
-                                                        │
-                                                        ▼
-                                          ┌───────────────────────────┐
-                                          │   SQLite: permissions.db  │
-                                          └───────────────────────────┘
+                  ┌───────────────────────────────┐
+                  │    HTTP Client / API Gateway   │
+                  └───────────────┬───────────────┘
+                                  │ POST /authorize
+                                  ▼
+                  ┌───────────────────────────────┐
+                  │    Express Middleware Stack   │
+                  │ (JSON Parser, Error Handler)  │
+                  └───────────────┬───────────────┘
+                                  │
+                                  ▼
+                  ┌───────────────────────────────┐
+                  │      AuthorizeController      │
+                  └───────┬───────────────┬───────┘
+                          │               │
+        1. Validate Token │               │ 2. Authorize Request
+                          ▼               ▼
+            ┌───────────────────┐   ┌───────────────────────────┐
+            │   TokenService    │   │   AuthorizationService    │
+            │  (jose + JWKS)    │   └─────────────┬─────────────┘
+            └───────────────────┘                 │
+                                                  │ 3. Fetch Permissions
+                                                  ▼
+                                    ┌───────────────────────────┐
+                                    │   PermissionRepository    │
+                                    │    (better-sqlite3)       │
+                                    └─────────────┬─────────────┘
+                                                  │
+                                                  ▼
+                                    ┌───────────────────────────┐
+                                    │   SQLite: permissions.db  │
+                                    └───────────────────────────┘
 ```
 
 ### Module Responsibilities
 
-1. **`frontend/`**: Interactive security dashboard providing live health monitoring, prefilled test scenarios, masked token input, and visual decision results.
-2. **`src/schemas/authorize.schema.ts`**: Validates request body structure using Zod; rejects unexpected keys, empty strings, and null bytes.
-3. **`src/services/token.service.ts`**: Verifies JWT cryptographic signature, expiration, issuer, and audience; maps claims to an internal `user_id`.
-4. **`src/utils/resource-path.ts`**: Maps HTTP verbs (`GET` -> `read`, `POST`/`PUT`/`PATCH` -> `write`, `DELETE` -> `delete`) and canonicalizes resource paths.
-5. **`src/utils/permission-matcher.ts`**: Implements segment-based wildcard matching and deterministic specificity calculation.
-6. **`src/services/authorization.service.ts`**: Coordinates permissions retrieval, filtering, and conflict resolution according to the documented precedence rules.
-7. **`src/repositories/permission.repository.ts`**: Executes parameterized SQL queries against SQLite.
-8. **`src/middleware/error-handler.ts`**: Centralized error translation ensuring uniform client errors without leaking stack traces or sensitive data.
+1. **`src/schemas/authorize.schema.ts`**: Validates request body structure using Zod; rejects unexpected keys, empty strings, and null bytes.
+2. **`src/services/token.service.ts`**: Verifies JWT cryptographic signature, expiration, issuer, and audience; maps claims to an internal `user_id`.
+3. **`src/utils/resource-path.ts`**: Maps HTTP verbs (`GET` -> `read`, `POST`/`PUT`/`PATCH` -> `write`, `DELETE` -> `delete`) and canonicalizes resource paths.
+4. **`src/utils/permission-matcher.ts`**: Implements segment-based wildcard matching and deterministic specificity calculation.
+5. **`src/services/authorization.service.ts`**: Coordinates permissions retrieval, filtering, and conflict resolution according to the documented precedence rules.
+6. **`src/repositories/permission.repository.ts`**: Executes parameterized SQL queries against SQLite.
+7. **`src/middleware/error-handler.ts`**: Centralized error translation ensuring uniform client errors without leaking stack traces or sensitive data.
 
 ---
 
@@ -311,56 +307,18 @@ This ensures that real Auth0 tokens integrate seamlessly with existing applicati
 
 ## 12. Running the Application
 
-### Option A: Local Development Workflow (Backend + Interactive Dashboard)
-
-To interact visually with the authorization engine, run the backend and frontend concurrently in two terminal tabs:
-
-#### Terminal 1: Backend Service (Port 8080)
+### Development Mode (with hot-reloading)
 ```bash
-# From project root
 npm run dev
-# Starts backend with tsx hot-reloading at http://localhost:8080
 ```
 
-#### Terminal 2: Frontend Dashboard (Port 5174)
-```bash
-# Navigate to frontend
-cd frontend
-
-# Install frontend dependencies (if not already installed)
-npm install
-
-# Start Vite dev server
-npm run dev
-# Starts dashboard at http://localhost:5174
-```
-
-Open your browser at **`http://localhost:5174`** to access the OpenFabric Authorization Dashboard. The dashboard automatically monitors backend connectivity via `GET /health` and proxies authorization requests to the Policy Decision Point.
-
----
-
-### Option B: Backend Production Build & Execution
-
+### Production Build & Execution
 ```bash
 # Compile TypeScript to dist/
 npm run build
 
-# Start production Node.js server
+# Start production server
 npm start
-```
-
----
-
-### Frontend Testing Commands
-
-```bash
-cd frontend
-
-# Run frontend component & integration tests (17 tests)
-npm test
-
-# Build frontend production bundle
-npm run build
 ```
 
 ---
@@ -602,18 +560,15 @@ npm run format
 
 ### Test Coverage Highlights
 
-* **94.50%** overall backend statement coverage across all application modules (87.86% branch, 97.61% function, 94.33% line).
-* **100%** coverage across Express application setup, routes, controllers, error handlers, and permission repositories.
-* **111 total automated test cases** across backend and frontend:
-  - **Backend (94 tests across 6 suites):**
-    - `tests/unit/permission-matcher.test.ts` (17 tests): Exact matching, wildcard collection writes, hierarchical parent-to-child inheritance, boundary isolation, and specificity scoring.
-    - `tests/unit/authorization.service.test.ts` (19 tests): All assignment sample scenarios, precedence resolution, explicit denial inheritance, and equal-specificity conflicts.
-    - `tests/unit/token.service.test.ts` (16 tests): Valid tokens, Auth0 prefix normalization, custom claims, expired tokens, forged signatures, invalid issuer/audience, disallowed signing algorithms (401), missing identity, upstream JWKS timeouts (503), non-200 JWKS HTTP response (503), network failures (503), and missing configuration (500).
-    - `tests/unit/resource-path.test.ts` (13 tests): Method mapping, path normalization, trailing slashes, URL decode safety, traversal blocking, and null byte rejection.
-    - `tests/unit/permission.repository.test.ts` (5 tests): Parameterized queries, action filtering, insert operations, and database error recovery.
-    - `tests/integration/authorize-api.test.ts` (24 tests): End-to-end HTTP API integration verifying all assignment scenarios, health checks, safe CORS and preflight OPTIONS, 401 client errors, 503 upstream errors, 400 validation errors, and sanitized 500 responses.
-  - **Frontend (17 tests):**
-    - `frontend/src/__tests__/dashboard.test.tsx` (17 tests): Layout rendering, real health check handling (connected & disconnected), token validation, method selection, path input, payload formatting, ALLOW/DENY visual treatment, matched permissions table, structured 400/401/503/network error panels, loading states, form reset, and zero token storage persistence.
+* **94.26%** overall statement coverage across all application modules.
+* **100%** coverage across Express routes, controllers, error handlers, and permission repositories.
+* **92 automated test cases** across 6 test suites:
+  - `tests/unit/permission-matcher.test.ts` (17 tests): Exact matching, wildcard collection writes, hierarchical parent-to-child inheritance, boundary isolation, and specificity scoring.
+  - `tests/unit/authorization.service.test.ts` (19 tests): All assignment sample scenarios, precedence resolution, explicit denial inheritance, and equal-specificity conflicts.
+  - `tests/unit/token.service.test.ts` (16 tests): Valid tokens, Auth0 prefix normalization, custom claims, expired tokens, forged signatures, invalid issuer/audience, disallowed signing algorithms (401), missing identity, upstream JWKS timeouts (503), non-200 JWKS HTTP response (503), network failures (503), and missing configuration (500).
+  - `tests/unit/resource-path.test.ts` (13 tests): Method mapping, path normalization, trailing slashes, URL decode safety, traversal blocking, and null byte rejection.
+  - `tests/unit/permission.repository.test.ts` (5 tests): Parameterized queries, action filtering, insert operations, and database error recovery.
+  - `tests/integration/authorize-api.test.ts` (22 tests): End-to-end HTTP API integration verifying all assignment scenarios, health checks, 401 client errors, 503 upstream errors, 400 validation errors, and sanitized 500 responses.
 
 ---
 
@@ -876,17 +831,14 @@ To satisfy the take-home submission guideline (*"3. Provide a brief video demo (
 2. **Database & Precedence Model (0:30 – 1:00)**:
    - Show `database/init.sql` and the 11 seed permissions.
    - Explain the deterministic precedence rules: specific rules beat general rules, deny beats allow at equal specificity, and collection writes (`wallets/*/transactions/*`) match `POST /wallets/wallet-789/transactions`.
-3. **Running the Live Automated Tests (0:45 – 1:30)**:
-   - Run `npm test` and `npm run test:coverage` in the terminal to demonstrate that all 94 automated backend tests pass across 6 suites with >94% statement coverage.
-   - Run `cd frontend && npm test` to demonstrate all 17 frontend dashboard unit & integration tests passing.
-4. **Interactive Dashboard & Live API Walkthrough (1:30 – 2:30)**:
-   - Open the web dashboard at `http://localhost:5174`.
-   - Point out the real-time **Connected (Port 8080)** backend status indicator powered by `GET /health`.
-   - Click **Scenario 1** (`user123` &bull; `GET /transactions`): Show prefilled method and path.
-   - Click **Scenario 2** (`user123` &bull; `DELETE /transactions/txn-456`): Demonstrate explicit inherited DENY.
-   - Submit empty token to show client-side input validation (`"Access token is required"`).
-   - Submit an invalid token to show live HTTP 401 Unauthorized (`"Malformed access token"`).
-   - Point out the visual ALLOW / DENY badges, verified user identity, matched permissions table, and error diagnosis panel.
+3. **Running the Live Tests (1:00 – 1:45)**:
+   - Run `npm test` and `npm run test:coverage` in the terminal to demonstrate that all 92 automated backend tests pass across 6 suites with >94% coverage.
+4. **Interactive cURL Walkthrough (1:45 – 2:30)**:
+   - Start the service (`npm run dev`).
+   - Execute Scenario 1 (`GET /transactions` -> ALLOW).
+   - Execute Scenario 2 (`DELETE /transactions/txn-456` -> explicit DENY).
+   - Execute Scenario 4b (`POST /wallets/wallet-789/transactions` -> ALLOW).
+   - Execute Scenario 5 (`POST /wallets/wallet-789/transactions` for user456 -> DENY).
 5. **Conclusion (2:30 – 2:45)**:
-   - Highlight security architecture: asymmetric cryptographic verification (`jose`), safe path normalization, traversal blocking, strict Zod validation, and sanitized 500 responses.
+   - Highlight error handling (400 validation, 401 unauthorized, 503 upstream JWKS timeout, sanitized 500s).
 
