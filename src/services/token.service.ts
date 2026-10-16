@@ -137,7 +137,9 @@ export class TokenService {
         error.name === 'FetchError' ||
         (error instanceof TypeError && error.message.includes('fetch failed')) ||
         (typeof error.message === 'string' &&
-          /fetch failed|network|socket|timeout|getaddrinfo|econnrefused/i.test(error.message)) ||
+          /fetch failed|network|socket|timeout|getaddrinfo|econnrefused|JSON Web Key Set HTTP response|JWK Set HTTP response/i.test(
+            error.message,
+          )) ||
         (error.cause &&
           typeof error.cause === 'object' &&
           ('code' in error.cause || 'message' in error.cause) &&
@@ -167,6 +169,9 @@ export class TokenService {
       }
       if (error.code === 'ERR_JWS_INVALID' || error.code === 'ERR_JWT_INVALID') {
         throw new AuthenticationError('Malformed access token');
+      }
+      if (error.code === 'ERR_JOSE_ALG_NOT_ALLOWED') {
+        throw new AuthenticationError('Unsupported or disallowed signing algorithm');
       }
 
       throw new AuthenticationError('Invalid or unauthorized access token');

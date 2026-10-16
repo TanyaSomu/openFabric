@@ -560,12 +560,12 @@ npm run format
 
 ### Test Coverage Highlights
 
-* **94.21%** overall statement coverage across all application modules.
+* **94.26%** overall statement coverage across all application modules.
 * **100%** coverage across Express routes, controllers, error handlers, and permission repositories.
-* **90 automated test cases** across 6 test suites:
+* **92 automated test cases** across 6 test suites:
   - `tests/unit/permission-matcher.test.ts` (17 tests): Exact matching, wildcard collection writes, hierarchical parent-to-child inheritance, boundary isolation, and specificity scoring.
   - `tests/unit/authorization.service.test.ts` (19 tests): All assignment sample scenarios, precedence resolution, explicit denial inheritance, and equal-specificity conflicts.
-  - `tests/unit/token.service.test.ts` (14 tests): Valid tokens, Auth0 prefix normalization, custom claims, expired tokens, forged signatures, invalid issuer/audience, missing identity, upstream JWKS timeouts (503), network failures (503), and missing configuration (500).
+  - `tests/unit/token.service.test.ts` (16 tests): Valid tokens, Auth0 prefix normalization, custom claims, expired tokens, forged signatures, invalid issuer/audience, disallowed signing algorithms (401), missing identity, upstream JWKS timeouts (503), non-200 JWKS HTTP response (503), network failures (503), and missing configuration (500).
   - `tests/unit/resource-path.test.ts` (13 tests): Method mapping, path normalization, trailing slashes, URL decode safety, traversal blocking, and null byte rejection.
   - `tests/unit/permission.repository.test.ts` (5 tests): Parameterized queries, action filtering, insert operations, and database error recovery.
   - `tests/integration/authorize-api.test.ts` (22 tests): End-to-end HTTP API integration verifying all assignment scenarios, health checks, 401 client errors, 503 upstream errors, 400 validation errors, and sanitized 500 responses.

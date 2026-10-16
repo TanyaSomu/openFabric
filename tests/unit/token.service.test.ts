@@ -219,6 +219,31 @@ describe('TokenService Unit Tests', () => {
     await expect(tokenService.verifyToken('')).rejects.toThrow(/missing or empty/);
   });
 
+  it('rejects unsupported or disallowed signing algorithm (e.g. HS256) with 401', async () => {
+    const tokenService = new TokenService({
+      issuerUrl: validIssuer,
+      audience: validAudience,
+      keySource: publicKey as KeySource,
+    });
+
+    const secret = new TextEncoder().encode('some-symmetric-secret-key-32bytes!');
+    const hs256Token = await new SignJWT({ sub: 'user123' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuer(validIssuer)
+      .setAudience(validAudience)
+      .setExpirationTime('1h')
+      .sign(secret);
+
+    try {
+      await tokenService.verifyToken(hs256Token);
+      expect.fail('Expected token verification to fail for unsupported algorithm');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect((err as AuthenticationError).statusCode).toBe(401);
+      expect((err as AuthenticationError).message).toMatch(/disallowed signing algorithm/i);
+    }
+  });
+
   it('throws 500 when Auth0 is not configured', async () => {
     const unconfiguredService = new TokenService({
       issuerUrl: undefined,
@@ -243,6 +268,32 @@ describe('TokenService Unit Tests', () => {
         const timeoutErr = new Error('JWKS connection timed out') as Error & { code?: string };
         timeoutErr.code = 'ERR_JWKS_TIMEOUT';
         throw timeoutErr;
+      };
+
+      const tokenService = new TokenService({
+        issuerUrl: validIssuer,
+        audience: validAudience,
+        keySource: mockKeySource,
+      });
+
+      const token = await createToken({ sub: 'user123' });
+
+      try {
+        await tokenService.verifyToken(token);
+        expect.fail('Expected verifyToken to throw UpstreamServiceError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(UpstreamServiceError);
+        expect((err as UpstreamServiceError).statusCode).toBe(503);
+        expect((err as UpstreamServiceError).message).toContain(
+          'Authentication provider key service is temporarily unavailable',
+        );
+      }
+    });
+
+    it('maps non-200 JWKS HTTP response (server unavailable) to 503 UpstreamServiceError', async () => {
+      const mockKeySource: KeySource = async () => {
+        const jwksErr = new Error('Expected 200 OK from the JSON Web Key Set HTTP response');
+        throw jwksErr;
       };
 
       const tokenService = new TokenService({
