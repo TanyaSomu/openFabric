@@ -73,6 +73,27 @@ describe('HTTP API Integration Tests (POST /authorize & GET /health)', () => {
     });
   });
 
+  describe('CORS and Preflight Handling', () => {
+    it('returns 204 for OPTIONS preflight request from allowed origin', async () => {
+      const res = await request(app)
+        .options('/authorize')
+        .set('Origin', 'http://localhost:5174');
+
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5174');
+      expect(res.headers['access-control-allow-methods']).toContain('POST');
+    });
+
+    it('sets CORS headers for GET /health from allowed origin', async () => {
+      const res = await request(app)
+        .get('/health')
+        .set('Origin', 'http://localhost:5174');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5174');
+    });
+  });
+
   describe('Verbatim Assignment Scenarios (POST /authorize)', () => {
     // Scenario 1: user123 GET /transactions -> ALLOW
     it('Scenario 1: user123 GET /transactions -> ALLOW', async () => {
