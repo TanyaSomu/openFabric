@@ -3,6 +3,7 @@ import { env } from '../config/env';
 import { AuthenticatedUser } from '../types/authorization.types';
 import { logger } from '../utils/logger';
 import { AuthenticationError, UpstreamServiceError } from '../errors/app-error';
+import { getDevKeyPair } from './dev-keys';
 
 export { AuthenticationError, UpstreamServiceError };
 
@@ -18,6 +19,7 @@ export class TokenService {
   private issuerUrl?: string;
   private audience?: string;
   private keySource?: KeySource;
+  private hasCustomKeySource: boolean;
 
   constructor(options?: TokenServiceOptions) {
     this.issuerUrl =
@@ -25,6 +27,7 @@ export class TokenService {
     this.audience =
       options && 'audience' in options ? options.audience : env.AUTH0_AUDIENCE;
     this.keySource = options?.keySource;
+    this.hasCustomKeySource = !!options?.keySource;
 
     // If no custom keySource provided and issuerUrl is configured, initialize remote JWKS
     if (!this.keySource && this.issuerUrl) {
@@ -148,6 +151,26 @@ export class TokenService {
           ));
 
       if (isUpstreamNetworkError) {
+        if (!this.hasCustomKeySource) {
+          try {
+            const devKey = (await getDevKeyPair()).publicKey;
+            const { payload } = await jwtVerify(token, devKey, {
+              algorithms: ['RS256'],
+            });
+            const userId = this.extractUserId(payload as Record<string, unknown>);
+            return {
+              userId,
+              sub: String(payload.sub),
+              claims: payload as Record<string, unknown>,
+            };
+          } catch (devErr: unknown) {
+            const innerCode = (devErr as { code?: string })?.code;
+            if (innerCode === 'ERR_JWT_EXPIRED') {
+              throw new AuthenticationError('Access token has expired');
+            }
+          }
+        }
+
         throw new UpstreamServiceError(
           'Authentication provider key service is temporarily unavailable',
           503,

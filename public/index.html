@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenFabric PDP - Authentication & Authorization Platform</title>
+  <meta name="description" content="Policy Decision Point dashboard for OAuth2 JWT verification and hierarchical SQLite permission matching with deterministic precedence.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- Header / Nav -->
+  <header class="app-header" id="app-header">
+    <div class="header-left">
+      <div class="logo-group">
+        <div class="logo-mark" id="logo-mark">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <div class="brand-row">
+            <h1 class="brand-name">OpenFabric</h1>
+            <span class="brand-badge">PDP v1.0</span>
+          </div>
+          <p class="brand-subtitle">Policy Decision Point • OAuth2 JWT & Hierarchical RBAC</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-center">
+      <nav class="nav-tabs" id="nav-tabs" role="tablist">
+        <button class="nav-tab active" id="tab-btn-playground" data-tab="playground" role="tab" aria-selected="true">
+          <span class="tab-icon">⚡</span> Playground
+        </button>
+        <button class="nav-tab" id="tab-btn-rules" data-tab="rules" role="tab" aria-selected="false">
+          <span class="tab-icon">🛡️</span> Permissions Policy
+        </button>
+        <button class="nav-tab" id="tab-btn-auditor" data-tab="auditor" role="tab" aria-selected="false">
+          <span class="tab-icon">🧪</span> Scenario Auditor
+        </button>
+        <button class="nav-tab" id="tab-btn-jwt" data-tab="jwt" role="tab" aria-selected="false">
+          <span class="tab-icon">🔑</span> JWT Inspector
+        </button>
+        <button class="nav-tab" id="tab-btn-precedence" data-tab="precedence" role="tab" aria-selected="false">
+          <span class="tab-icon">📐</span> Precedence Matrix
+        </button>
+      </nav>
+    </div>
+
+    <div class="header-right">
+      <div class="status-indicator-group">
+        <div class="status-pill status-healthy" id="server-status-pill" title="Express Service Status">
+          <span class="pulse-dot"></span>
+          <span class="status-text" id="server-status-text">PDP Online</span>
+        </div>
+        <div class="status-pill status-db" id="db-status-pill" title="SQLite WAL Engine">
+          <span class="db-icon">🗄️</span>
+          <span class="status-text" id="db-status-text">SQLite WAL</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-container" id="main-container">
+
+    <!-- TAB 1: PLAYGROUND -->
+    <section class="tab-panel active" id="panel-playground" role="tabpanel">
+      <!-- Quick Scenarios Carousel -->
+      <div class="card scenarios-card" id="scenarios-bar">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-icon">🎯</span>
+            <h2 class="section-title">Assignment Reference Scenarios</h2>
+          </div>
+          <span class="section-hint">Click any scenario to populate the request parameters instantly</span>
+        </div>
+        <div class="scenarios-grid" id="scenarios-carousel">
+          <!-- Dynamically populated or rendered -->
+        </div>
+      </div>
+
+      <!-- Playground Two-Column Layout -->
+      <div class="playground-layout">
+        <!-- Request Builder Column -->
+        <div class="playground-col playground-form-col">
+          <div class="card" id="request-builder-card">
+            <div class="section-header">
+              <div class="section-title-wrap">
+                <span class="section-icon">🎛️</span>
+                <h2 class="section-title">Request Evaluator (POST /authorize)</h2>
+              </div>
+              <span class="badge badge-indigo">Policy Decision Point</span>
+            </div>
+
+            <!-- Persona Selector -->
+            <div class="form-group">
+              <label class="form-label" for="persona-select">
+                <span>Select Test Persona</span>
+                <span class="label-aside">Auto-mints signed RS256 JWT</span>
+              </label>
+              <div class="personas-selector-grid" id="personas-container">
+                <!-- Personas dynamically loaded -->
+              </div>
+            </div>
+
+            <!-- Custom User ID Override (Optional) -->
+            <div class="form-group custom-user-group" id="custom-user-group">
+              <label class="form-label" for="custom-user-input">
+                <span>Principal Subject / User ID</span>
+                <span class="label-aside">Supports Auth0 prefix (e.g. <code>auth0|user123</code>)</span>
+              </label>
+              <input type="text" id="custom-user-input" class="text-input font-mono" placeholder="e.g. user123 or auth0|user123" value="user123">
+            </div>
+
+            <!-- HTTP Method Selection -->
+            <div class="form-group">
+              <label class="form-label">
+                <span>HTTP Method &amp; Action Mapping</span>
+                <span class="label-aside" id="action-mapping-label">Maps to: <strong>read</strong></span>
+              </label>
+              <div class="method-selector-group" id="method-selector-group">
+                <button type="button" class="method-btn method-get active" data-method="GET" id="method-btn-get">GET</button>
+                <button type="button" class="method-btn method-post" data-method="POST" id="method-btn-post">POST</button>
+                <button type="button" class="method-btn method-put" data-method="PUT" id="method-btn-put">PUT</button>
+                <button type="button" class="method-btn method-patch" data-method="PATCH" id="method-btn-patch">PATCH</button>
+                <button type="button" class="method-btn method-delete" data-method="DELETE" id="method-btn-delete">DELETE</button>
+              </div>
+            </div>
+
+            <!-- Resource Path Input -->
+            <div class="form-group">
+              <label class="form-label" for="resource-path-input">
+                <span>Resource Path</span>
+                <span class="label-aside">Normalized automatically</span>
+              </label>
+              <div class="input-with-presets">
+                <input type="text" id="resource-path-input" class="text-input font-mono" placeholder="/transactions" value="/transactions">
+              </div>
+              <!-- Common Presets Chips -->
+              <div class="preset-chips" id="path-preset-chips">
+                <span class="preset-chip" data-path="/transactions">/transactions</span>
+                <span class="preset-chip" data-path="/transactions/txn-456">/transactions/txn-456</span>
+                <span class="preset-chip" data-path="/wallets/wallet-123">/wallets/wallet-123</span>
+                <span class="preset-chip" data-path="/wallets/wallet-789">/wallets/wallet-789</span>
+                <span class="preset-chip" data-path="/wallets/wallet-789/transactions">/wallets/wallet-789/transactions</span>
+                <span class="preset-chip" data-path="/accounts">/accounts</span>
+              </div>
+            </div>
+
+            <!-- Token Simulation Modifiers -->
+            <div class="form-group">
+              <label class="form-label">
+                <span>Token Simulation Mode</span>
+              </label>
+              <div class="token-mode-radios">
+                <label class="radio-label">
+                  <input type="radio" name="token-mode" value="valid" id="token-mode-valid" checked>
+                  <span>Valid Signed RS256 JWT</span>
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="token-mode" value="expired" id="token-mode-expired">
+                  <span>Expired Token (401)</span>
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="token-mode" value="forged" id="token-mode-forged">
+                  <span>Forged Signature (401)</span>
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="token-mode" value="custom" id="token-mode-custom">
+                  <span>Custom Token</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group" id="custom-token-group" style="display: none;">
+              <label class="form-label" for="custom-token-input">
+                <span>Raw Bearer Token</span>
+              </label>
+              <textarea id="custom-token-input" class="textarea-input font-mono" rows="3" placeholder="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."></textarea>
+            </div>
+
+            <!-- Submit Button -->
+            <button type="button" class="btn btn-primary btn-evaluate" id="btn-evaluate">
+              <span class="btn-icon">⚡</span>
+              <span class="btn-text">Evaluate Authorization</span>
+              <span class="spinner" id="eval-spinner"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Evaluation Results Column -->
+        <div class="playground-col playground-result-col">
+          <!-- Decision Banner -->
+          <div class="card result-card" id="decision-result-card">
+            <div class="decision-banner-wrapper" id="decision-banner-wrapper">
+              <div class="decision-badge" id="decision-badge">
+                <span class="decision-icon" id="decision-icon">⏳</span>
+                <span class="decision-text" id="decision-text">READY</span>
+              </div>
+              <div class="decision-meta" id="decision-meta">
+                <div class="meta-item">
+                  <span class="meta-label">Principal</span>
+                  <span class="meta-val font-mono" id="result-user-id">--</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Action</span>
+                  <span class="meta-val font-mono" id="result-action">--</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Canonical Path</span>
+                  <span class="meta-val font-mono" id="result-path">--</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Latency</span>
+                  <span class="meta-val font-mono" id="result-latency">0 ms</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="decision-reason-box" id="decision-reason-box">
+              <span class="reason-tag">EVALUATION RATIONALE</span>
+              <p class="reason-content" id="decision-reason-text">Select a scenario or configure parameters and click "Evaluate Authorization" to test the Policy Decision Point.</p>
+            </div>
+
+            <!-- Precedence & Matching Details -->
+            <div class="evaluation-breakdown-section" id="evaluation-breakdown">
+              <div class="subsection-header">
+                <h3 class="subsection-title">Matched Policy Rules &amp; Specificity Scoring</h3>
+                <span class="rule-hint" id="breakdown-hint">Deterministic Precedence Engine</span>
+              </div>
+
+              <div class="matched-rules-table-wrapper" id="matched-rules-table-wrapper">
+                <table class="data-table" id="matched-rules-table">
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Resource Pattern</th>
+                      <th>Action</th>
+                      <th>Effect</th>
+                      <th>Specificity Score</th>
+                      <th>Precedence Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody id="matched-rules-tbody">
+                    <tr>
+                      <td colspan="6" class="text-center text-muted">No evaluation run yet</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Code & cURL Inspector Accordion -->
+            <div class="card-accordion" id="request-code-accordion">
+              <div class="accordion-header" id="accordion-toggle-curl">
+                <span class="accordion-title">📋 Live cURL Command</span>
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-copy-curl">Copy cURL</button>
+              </div>
+              <div class="accordion-body font-mono" id="curl-output">
+                curl -X POST http://localhost:8080/authorize ...
+              </div>
+
+              <div class="accordion-header" id="accordion-toggle-json">
+                <span class="accordion-title">🔍 Raw API Response JSON</span>
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-copy-json">Copy JSON</button>
+              </div>
+              <div class="accordion-body font-mono" id="json-output">
+                { "status": "Awaiting evaluation" }
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: PERMISSIONS POLICY MANAGER -->
+    <section class="tab-panel" id="panel-rules" role="tabpanel">
+      <div class="card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-icon">🛡️</span>
+            <div>
+              <h2 class="section-title">SQLite Policy Database (<code>user_permissions</code>)</h2>
+              <p class="section-subtitle">Real-time inspection and live editing of stored permission rules</p>
+            </div>
+          </div>
+          <div class="header-actions">
+            <button type="button" class="btn btn-secondary" id="btn-open-add-rule">
+              <span>+ Add Permission Rule</span>
+            </button>
+            <button type="button" class="btn btn-outline" id="btn-reset-rules">
+              <span>↺ Reset to Seed Data</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+          <input type="text" id="filter-user-input" class="text-input filter-input" placeholder="Filter by User ID (e.g. user123)...">
+          <select id="filter-action-select" class="select-input filter-select">
+            <option value="">All Actions</option>
+            <option value="read">read</option>
+            <option value="write">write</option>
+            <option value="delete">delete</option>
+          </select>
+          <select id="filter-effect-select" class="select-input filter-select">
+            <option value="">All Effects</option>
+            <option value="allow">allow</option>
+            <option value="deny">deny</option>
+          </select>
+          <button type="button" class="btn btn-ghost" id="btn-clear-filters">Clear</button>
+        </div>
+
+        <!-- Permissions Table -->
+        <div class="table-container">
+          <table class="data-table" id="permissions-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>User / Principal</th>
+                <th>Action</th>
+                <th>Resource Pattern</th>
+                <th>Effect</th>
+                <th>Specificity Potential</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="permissions-table-tbody">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: SCENARIO AUDITOR -->
+    <section class="tab-panel" id="panel-auditor" role="tabpanel">
+      <div class="card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-icon">🧪</span>
+            <div>
+              <h2 class="section-title">Automated Assignment Scenario Auditor</h2>
+              <p class="section-subtitle">End-to-end execution of all assignment test scenarios against live PDP</p>
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-run-audit">
+            <span class="btn-icon">▶</span> Run Full Compliance Audit
+          </button>
+        </div>
+
+        <div class="audit-summary-cards" id="audit-summary-row">
+          <div class="summary-card">
+            <span class="summary-label">Audit Status</span>
+            <span class="summary-value" id="audit-status-badge">NOT RUN</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Scenarios Passed</span>
+            <span class="summary-value font-mono" id="audit-pass-count">0 / 7</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Total Execution Time</span>
+            <span class="summary-value font-mono" id="audit-total-time">0 ms</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Precedence Coverage</span>
+            <span class="summary-value" id="audit-coverage-badge">100%</span>
+          </div>
+        </div>
+
+        <div class="table-container">
+          <table class="data-table" id="auditor-table">
+            <thead>
+              <tr>
+                <th>Scenario</th>
+                <th>Request Spec</th>
+                <th>Expected</th>
+                <th>Actual Decision</th>
+                <th>Latency</th>
+                <th>Precedence Rationale</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="auditor-table-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: JWT INSPECTOR -->
+    <section class="tab-panel" id="panel-jwt" role="tabpanel">
+      <div class="card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-icon">🔑</span>
+            <div>
+              <h2 class="section-title">Cryptographic JWT Token Inspector</h2>
+              <p class="section-subtitle">RFC 7519 / RFC 7517 OAuth2 JSON Web Token structure and claims analysis</p>
+            </div>
+          </div>
+          <button type="button" class="btn btn-secondary" id="btn-copy-token">
+            <span>Copy Active Token</span>
+          </button>
+        </div>
+
+        <div class="jwt-inspector-grid">
+          <!-- Token Raw Block -->
+          <div class="jwt-col">
+            <h3 class="subsection-title">Encoded Token (Bearer)</h3>
+            <div class="jwt-encoded-display font-mono" id="jwt-raw-display">
+              <!-- Token colored parts -->
+            </div>
+            <div class="jwt-legend">
+              <span class="legend-item legend-header">Header</span>
+              <span class="legend-item legend-payload">Payload</span>
+              <span class="legend-item legend-signature">Signature</span>
+            </div>
+          </div>
+
+          <!-- Token Decoded Parts -->
+          <div class="jwt-col">
+            <h3 class="subsection-title">Decoded Header (JOSE)</h3>
+            <pre class="json-block font-mono" id="jwt-header-display">{}</pre>
+
+            <h3 class="subsection-title" style="margin-top: 1.5rem;">Decoded Payload (Claims)</h3>
+            <pre class="json-block font-mono" id="jwt-payload-display">{}</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: PRECEDENCE MATRIX -->
+    <section class="tab-panel" id="panel-precedence" role="tabpanel">
+      <div class="card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-icon">📐</span>
+            <div>
+              <h2 class="section-title">Deterministic Conflict Resolution Policy</h2>
+              <p class="section-subtitle">Mathematical specification of specificity scoring and precedence resolution</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="precedence-grid">
+          <div class="precedence-card">
+            <div class="precedence-num">01</div>
+            <h3 class="precedence-title">More Specific Beats General</h3>
+            <p class="precedence-desc">A rule targeting a specific entity path overrides broader collection or wildcard permissions regardless of allow/deny effect.</p>
+            <div class="score-pill font-mono">transactions/txn-456 (20 pts) > transactions (10 pts) > * (0 pts)</div>
+          </div>
+
+          <div class="precedence-card">
+            <div class="precedence-num">02</div>
+            <h3 class="precedence-title">DENY Beats ALLOW</h3>
+            <p class="precedence-desc">When conflicting permissions exist at the exact same highest specificity score, <strong>DENY</strong> unconditionally triumphs.</p>
+            <div class="score-pill font-mono">DENY (10 pts) + ALLOW (10 pts) ➔ DENY</div>
+          </div>
+
+          <div class="precedence-card">
+            <div class="precedence-num">03</div>
+            <h3 class="precedence-title">Collection-Write Inheritance</h3>
+            <p class="precedence-desc">Patterns ending in <code>/*</code> grant write access to the immediate collection endpoint for REST item creation.</p>
+            <div class="score-pill font-mono">wallets/*/transactions/* (22 pts) allows POST .../transactions</div>
+          </div>
+
+          <div class="precedence-card">
+            <div class="precedence-num">04</div>
+            <h3 class="precedence-title">Default Deny Posture</h3>
+            <p class="precedence-desc">Zero matching permissions automatically evaluates to <strong>DENY</strong> for strict zero-trust boundary security.</p>
+            <div class="score-pill font-mono">No Matching Rule ➔ DENY</div>
+          </div>
+        </div>
+
+        <!-- Full Precedence Table -->
+        <h3 class="subsection-title" style="margin-top: 2rem; margin-bottom: 1rem;">Precedence Evaluation Matrix</h3>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Scenario Pattern</th>
+                <th>General Rule</th>
+                <th>Specific Rule</th>
+                <th>Target Resource</th>
+                <th>Outcome</th>
+                <th>Decision Rationale</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Child Deny Overrides Parent Allow</strong></td>
+                <td><code>transactions</code> (ALLOW)</td>
+                <td><code>transactions/txn-456</code> (DENY)</td>
+                <td><code>/transactions/txn-456</code></td>
+                <td><span class="badge badge-deny">DENY</span></td>
+                <td>Child rule (score 20) overrides parent collection rule (score 10).</td>
+              </tr>
+              <tr>
+                <td><strong>Child Allow Overrides Parent Deny</strong></td>
+                <td><code>transactions</code> (DENY)</td>
+                <td><code>transactions/txn-123</code> (ALLOW)</td>
+                <td><code>/transactions/txn-123</code></td>
+                <td><span class="badge badge-allow">ALLOW</span></td>
+                <td>Child rule (score 20) overrides parent collection rule (score 10).</td>
+              </tr>
+              <tr>
+                <td><strong>General Allow, Specific Deny</strong></td>
+                <td><code>*</code> (ALLOW)</td>
+                <td><code>wallets/secret</code> (DENY)</td>
+                <td><code>/wallets/secret</code></td>
+                <td><span class="badge badge-deny">DENY</span></td>
+                <td>Specific DENY (score 20) beats General ALLOW (score 0).</td>
+              </tr>
+              <tr>
+                <td><strong>General Deny, Specific Allow</strong></td>
+                <td><code>wallets/*</code> (DENY)</td>
+                <td><code>wallets/wallet-vip</code> (ALLOW)</td>
+                <td><code>/wallets/wallet-vip</code></td>
+                <td><span class="badge badge-allow">ALLOW</span></td>
+                <td>Specific ALLOW (score 20) beats General DENY (score 11).</td>
+              </tr>
+              <tr>
+                <td><strong>Same Specificity Conflict</strong></td>
+                <td><code>transactions</code> (ALLOW)</td>
+                <td><code>transactions</code> (DENY)</td>
+                <td><code>/transactions</code></td>
+                <td><span class="badge badge-deny">DENY</span></td>
+                <td>Both at score 10: Deny beats Allow.</td>
+              </tr>
+              <tr>
+                <td><strong>No Applicable Permission</strong></td>
+                <td>None</td>
+                <td>None</td>
+                <td><code>/any/unconfigured</code></td>
+                <td><span class="badge badge-deny">DENY</span></td>
+                <td>Default Deny posture.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Add Rule Modal -->
+  <div class="modal-overlay" id="add-rule-modal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Add New Permission Rule</h3>
+        <button type="button" class="modal-close-btn" id="modal-close-btn">&times;</button>
+      </div>
+      <form id="add-rule-form">
+        <div class="form-group">
+          <label class="form-label" for="new-rule-user">User / Principal ID</label>
+          <input type="text" id="new-rule-user" class="text-input font-mono" placeholder="e.g. user123, user999, admin789" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="new-rule-action">Action</label>
+          <select id="new-rule-action" class="select-input font-mono" required>
+            <option value="read">read (GET)</option>
+            <option value="write">write (POST, PUT, PATCH)</option>
+            <option value="delete">delete (DELETE)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="new-rule-resource">Resource Pattern</label>
+          <input type="text" id="new-rule-resource" class="text-input font-mono" placeholder="e.g. transactions, wallets/*, wallets/*/transactions/*, *" required>
+          <span class="input-help">Use <code>*</code> for global access, or segment wildcards like <code>wallets/*</code>.</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="new-rule-effect">Effect</label>
+          <select id="new-rule-effect" class="select-input font-mono" required>
+            <option value="allow">allow</option>
+            <option value="deny">deny</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="modal-cancel-btn">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="modal-submit-btn">Insert Rule</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    <div class="footer-content">
+      <span>OpenFabric PDP Core Engine</span>
+      <span>•</span>
+      <span>Node.js v20+ &amp; Express 5</span>
+      <span>•</span>
+      <span>SQLite WAL &amp; Jose Cryptography</span>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
